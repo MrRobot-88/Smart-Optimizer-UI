@@ -501,17 +501,20 @@ def page():
         snap = dict(jobs["radarr"])
 
     rows = ""
-    for x in upgrades[:20]:
+    for i, x in enumerate(upgrades[:15]):
+        extra = " changeextra" if i >= 5 else ""
         delta = gib(x["saved"])
         cls = "good" if delta >= 0 else "bad"
-        rows += "<tr class='filterrow' data-search='%s'><td>%s</td><td>%.2f GiB</td><td>%.2f GiB</td><td class='%s'>%+.2f GiB</td></tr>" % (
-            html.escape(x["title"].lower(), quote=True), html.escape(x["title"]), gib(x["old"]), gib(x["new"]), cls, delta)
+        rows += "<tr class='filterrow%s' data-search='%s'><td>%s</td><td>%.2f GiB</td><td>%.2f GiB</td><td class='%s'>%+.2f GiB</td></tr>" % (
+            extra, html.escape(x["title"].lower(), quote=True), html.escape(x["title"]), gib(x["old"]), gib(x["new"]), cls, delta)
     if not rows:
         rows = "<tr><td colspan='4' class='muted'>No completed upgrade pairs found in the loaded history window.</td></tr>"
+    elif len(upgrades) > 5:
+        rows += "<tr id='changesExpandRow'><td colspan='4'><button type='button' class='expandbar' id='changesExpand' onclick='toggleChanges()'>Show %d more changes ↓</button></td></tr>" % (min(len(upgrades), 15) - 5)
 
     qrows = ""
     visible_queue = queue[:4]
-    for i, x in enumerate(queue[:20]):
+    for i, x in enumerate(queue[:15]):
         cls = "attention" if x["attention"] else ""
         note = x["message"] or ("Time left: %s" % x["timeleft"])
         extra = " extra" if i >= 4 else ""
@@ -522,7 +525,7 @@ def page():
     if not qrows:
         qrows = "<div class='empty'>Nothing is currently in Radarr's download queue.</div>"
     elif len(queue) > 4:
-        qrows += """<button type="button" class="expandbar" id="queueExpand" onclick="toggleQueue()">Show %d more downloads ↓</button>""" % (min(len(queue), 20) - 4)
+        qrows += """<button type="button" class="expandbar" id="queueExpand" onclick="toggleQueue()">Show %d more downloads ↓</button>""" % (min(len(queue), 15) - 4)
 
     runstat = manual_status("radarr")
     runlabel = "Idle" if not runstat["requested"] else ("%s · %d / %d searched" % (runstat["state"].capitalize(), runstat["searched"], runstat["requested"]))
@@ -547,7 +550,7 @@ def page():
 <div class="stat"><div class="stathead"><span><span class="mini">◷</span>Temporary extra today</span></div><div class="value">+%d</div><div class="sub">Resets tomorrow</div></div>
 </div>
 <div class="layout"><div>
-<div class="panel"><div class="panelhead"><div><h3>Recent file changes</h3><p>Observed Radarr upgrade pairs. These are not all necessarily optimizer-triggered.</p></div><span class="badge">HISTORY</span></div>
+<div class="panel"><div class="panelhead"><div><h3>Recent file changes</h3><p>Observed Radarr upgrade pairs. These are not all necessarily optimizer-triggered.</p></div><a class="badge" href="/radarr/history">HISTORY</a></div>
 <table><thead><tr><th>Release</th><th>Before</th><th>After</th><th>Change</th></tr></thead><tbody>%s</tbody></table></div>
 <div class="panel"><div class="panelhead"><div><h3>Optimizer activity</h3><p>Output from runs started through this dashboard.</p></div><span class="badge">ACTIVITY</span></div><pre>%s</pre></div>
 </div>
@@ -566,7 +569,8 @@ def page():
 </div>
 <script>
 let queueOpen=false;
-function toggleQueue(){queueOpen=!queueOpen;document.querySelectorAll('.queueitem.extra').forEach(el=>el.style.display=queueOpen?'block':'none');const b=document.getElementById('queueExpand');if(b)b.textContent=queueOpen?'Collapse downloads ↑':'Show more downloads ↓';}
+function toggleQueue(){const b=document.getElementById('queueExpand');if(queueOpen){location.href='/radarr/history';return;}queueOpen=true;document.querySelectorAll('.queueitem.extra').forEach(el=>el.style.display='block');if(b)b.textContent='History →';}
+let changesOpen=false;function toggleChanges(){const b=document.getElementById('changesExpand');if(changesOpen){location.href='/radarr/history';return;}changesOpen=true;document.querySelectorAll('.changeextra').forEach(el=>el.style.display='table-row');if(b)b.textContent='History →';}
 const box=document.getElementById('librarySearch');
 box.addEventListener('input',()=>{const q=box.value.trim().toLowerCase();document.querySelectorAll('.filterrow').forEach(el=>{const match=!q||((el.dataset.search||'').includes(q));if(el.classList.contains('extra')&&!queueOpen&&!q){el.style.display='none';}else{el.style.display=match?'':'none';}});});
 </script><script>
@@ -584,6 +588,35 @@ box.addEventListener('input',()=>{const q=box.value.trim().toLowerCase();documen
 
 def home_page():
     return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer</title><style>%s</style></head><body><div class="shell homewrap"><div class="homecard"><div class="brand" style="justify-content:center;margin-bottom:24px"><div class="mark">S</div></div><h1>Smart Optimizer</h1><p>Choose the library you want to inspect.</p><div class="chooser"><a class="choice" href="/radarr"><b>Radarr →</b><span>Movies · storage savings · download radar</span></a><a class="choice" href="/sonarr"><b>Sonarr →</b><span>Episodes · storage savings · download radar</span></a></div></div></div></body></html>""" % CSS
+
+
+def history_page(app):
+    try:
+        if app == "radarr":
+            upgrades = completed_upgrades(history_records())
+            title, noun = "Radarr history", "movies"
+        else:
+            upgrades = sonarr_completed_upgrades(sonarr_history_records())
+            title, noun = "Sonarr history", "episodes"
+        rows = ""
+        for x in upgrades:
+            delta = gib(x["saved"])
+            cls = "good" if delta >= 0 else "bad"
+            rows += "<tr><td>%s</td><td>%.2f GiB</td><td>%.2f GiB</td><td class='%s'>%+.2f GiB</td><td>%s</td></tr>" % (
+                html.escape(x["title"]), gib(x["old"]), gib(x["new"]), cls, delta, html.escape((x.get("date") or "")[:19].replace("T", " ")))
+        if not rows:
+            rows = "<tr><td colspan='5' class='muted'>No completed upgrade pairs found in the loaded history window.</td></tr>"
+        err = ""
+    except Exception as exc:
+        rows = ""
+        err = "<div class='notice bad'>%s API error: %s</div>" % (app.capitalize(), html.escape(str(exc)))
+        title, noun = app.capitalize() + " history", "items"
+    return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer UI · %s</title><style>%s</style></head><body><div class="shell">
+<div class="topbar compact"><div class="brand"><div class="brandcopy"><h1>%s</h1><div>Complete observed upgrade history available in the loaded API history window.</div></div></div><div class="nav"><a class="badge" href="/%s">← Back to dashboard</a></div></div>
+%s
+<div class="panel"><div class="panelhead"><div><h3>All recent observed changes</h3><p>Size changes for %s returned by the configured history window.</p></div><span class="badge">HISTORY</span></div>
+<table><thead><tr><th>Release</th><th>Before</th><th>After</th><th>Change</th><th>Date</th></tr></thead><tbody>%s</tbody></table></div>
+</div></body></html>""" % (html.escape(title), CSS, html.escape(title), app, err, noun, rows)
 
 
 def sonarr_page():
@@ -605,7 +638,7 @@ def sonarr_page():
     reduction_pct = (saved / total_before * 100.0) if total_before else 0.0
     last_date = upgrades[0]["date"][:10] if upgrades else "—"
     rows = ""
-    for i, x in enumerate(upgrades[:20]):
+    for i, x in enumerate(upgrades[:15]):
         delta = gib(x["saved"])
         cls = "good" if delta >= 0 else "bad"
         extra = " class='changeextra'" if i >= 5 else ""
@@ -614,9 +647,9 @@ def sonarr_page():
     if not rows:
         rows = "<tr><td colspan='4' class='muted'>No completed episode upgrade pairs found in the loaded history window.</td></tr>"
     elif len(upgrades) > 5:
-        rows += "<tr id='changesExpandRow'><td colspan='4'><button type='button' class='expandbar' id='changesExpand' onclick='toggleChanges()'>Show %d more changes ↓</button></td></tr>" % (min(len(upgrades), 20) - 5)
+        rows += "<tr id='changesExpandRow'><td colspan='4'><button type='button' class='expandbar' id='changesExpand' onclick='toggleChanges()'>Show %d more changes ↓</button></td></tr>" % (min(len(upgrades), 15) - 5)
     qrows = ""
-    for i, x in enumerate(queue[:20]):
+    for i, x in enumerate(queue[:15]):
         size = float(x.get("size") or 0); left = float(x.get("sizeleft") or 0)
         progress = max(0.0, min(100.0, ((size-left)/size*100.0) if size else 0.0))
         title = x.get("title") or ("Episode ID %s" % x.get("episodeId"))
@@ -627,7 +660,7 @@ def sonarr_page():
     if not qrows:
         qrows = "<div class='empty'>Nothing is currently in Sonarr's download queue.</div>"
     elif len(queue) > 4:
-        qrows += "<button type='button' class='expandbar' id='queueExpand' onclick='toggleQueue()'>Show %d more downloads ↓</button>" % (min(len(queue), 20) - 4)
+        qrows += "<button type='button' class='expandbar' id='queueExpand' onclick='toggleQueue()'>Show %d more downloads ↓</button>" % (min(len(queue), 15) - 4)
     runstat = manual_status("sonarr")
     runlabel = "Idle" if not runstat["requested"] else ("%s · %d / %d searched" % (runstat["state"].capitalize(), runstat["searched"], runstat["requested"]))
     son_actions = """<div class="controlbar primary"><form class="controlbox manualform" method="post" action="/manual-search"><input type="hidden" name="app" value="sonarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="50"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-sonarr" class="manualstate">%s</span></div>
@@ -645,7 +678,7 @@ def sonarr_page():
 </div>
 <div class="dashboard2">
 <div class="panel"><div class="panelhead"><div><h3>Download radar</h3><p>Live Sonarr queue.</p></div><span class="badge">%d ACTIVE</span></div>%s</div>
-<div class="panel"><div class="panelhead"><div><h3>Recent changes</h3><p>Latest optimized episodes and their size changes.</p></div><span class="badge">HISTORY</span></div><table><thead><tr><th>Release</th><th>Before</th><th>After</th><th>Change</th></tr></thead><tbody>%s</tbody></table></div>
+<div class="panel"><div class="panelhead"><div><h3>Recent changes</h3><p>Latest optimized episodes and their size changes.</p></div><a class="badge" href="/sonarr/history">HISTORY</a></div><table><thead><tr><th>Release</th><th>Before</th><th>After</th><th>Change</th></tr></thead><tbody>%s</tbody></table></div>
 </div>
 <div class="dashboard2">
 <div class="panel"><div class="panelhead"><div><h3>Optimizer intelligence</h3><p>Useful context without pretending Sonarr history equals optimizer success.</p></div><span class="badge">SUMMARY</span></div><div class="sidecontent">
@@ -664,8 +697,8 @@ def sonarr_page():
 </div>
 <div class="footer"><a href="/">Smart Optimizer</a> · Sonarr dashboard</div></div>
 <script>
-let queueOpen=false;function toggleQueue(){queueOpen=!queueOpen;document.querySelectorAll('.queueitem.extra').forEach(el=>el.style.display=queueOpen?'block':'none');const b=document.getElementById('queueExpand');if(b)b.textContent=queueOpen?'Collapse downloads ↑':'Show more downloads ↓';}
-let changesOpen=false;function toggleChanges(){changesOpen=!changesOpen;document.querySelectorAll('.changeextra').forEach(el=>el.style.display=changesOpen?'table-row':'none');const b=document.getElementById('changesExpand');if(b)b.textContent=changesOpen?'Collapse changes ↑':'Show more changes ↓';}
+let queueOpen=false;function toggleQueue(){const b=document.getElementById('queueExpand');if(queueOpen){location.href='/sonarr/history';return;}queueOpen=true;document.querySelectorAll('.queueitem.extra').forEach(el=>el.style.display='block');if(b)b.textContent='History →';}
+let changesOpen=false;function toggleChanges(){const b=document.getElementById('changesExpand');if(changesOpen){location.href='/sonarr/history';return;}changesOpen=true;document.querySelectorAll('.changeextra').forEach(el=>el.style.display='table-row');if(b)b.textContent='History →';}
 </script>
 %s
 </body></html>""" % (
@@ -690,6 +723,10 @@ class Handler(BaseHTTPRequestHandler):
             rendered = page()
         elif path == "/sonarr":
             rendered = sonarr_page()
+        elif path == "/radarr/history":
+            rendered = history_page("radarr")
+        elif path == "/sonarr/history":
+            rendered = history_page("sonarr")
         else:
             self.send_error(404); return
         body = rendered.encode("utf-8")
