@@ -7,6 +7,7 @@ Standard library only. The optimizer remains fully usable without this file.
 import html
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -74,7 +75,7 @@ def add_daily_extra(app, amount=50):
     return extras[today]
 
 job_lock = threading.Lock()
-jobs = {a: {"running": False, "requested": 0, "start": 0, "proc": None, "stopped": False, "started": None, "finished": None, "output": "", "returncode": None} for a in ("radarr", "sonarr")}
+jobs = {a: {"running": False, "requested": 0, "start": 0, "proc": None, "stopped": False, "started": None, "finished": None, "output": "", "current": "", "returncode": None} for a in ("radarr", "sonarr")}
 
 
 def radarr_request(path, method="GET", payload=None):
@@ -383,7 +384,8 @@ def manual_status(app):
         state = "finished"
         detail = "No eligible items" if requested and searched == 0 else ""
     return {"state": state, "searched": searched, "requested": requested,
-            "running": bool(snap.get("running")), "detail": detail}
+            "running": bool(snap.get("running")), "detail": detail,
+            "current": str(snap.get("current") or "")}
 
 def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
     with job_lock:
@@ -391,7 +393,7 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
         if jobs[app]["running"] or jobs[other]["running"]: return False
         start = search_count(app)
         if daily_extra: add_daily_extra(app, daily_extra)
-        jobs[app].update(running=True, requested=int(searches_per_run or 0), start=start, proc=None, stopped=False, started=time.time(), finished=None, output="", returncode=None)
+        jobs[app].update(running=True, requested=int(searches_per_run or 0), start=start, proc=None, stopped=False, started=time.time(), finished=None, output="", current="", returncode=None)
     def worker():
         script = OPTIMIZER if app == "radarr" else SONARR_OPTIMIZER
         cmd = ["python3", "-u", script] + (["--live"] if live else [])
@@ -404,7 +406,21 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
             with job_lock:
                 jobs[app]["proc"] = proc; stop_now = jobs[app]["stopped"]
             if stop_now: os.killpg(proc.pid, signal.SIGTERM)
-            output, _ = proc.communicate()
+            chunks = []
+            for line in proc.stdout:
+                chunks.append(line)
+                if len(chunks) > 2000:
+                    chunks = chunks[-1000:]
+                clean = line.strip()
+                match = re.match(r"^\\s*\\d+\\.\\s+(.+?)\\s+S(\\d{2})E(\\d{2})\\s*$", clean)
+                if match:
+                    current = "%s S%sE%s" % (match.group(1), match.group(2), match.group(3))
+                    with job_lock:
+                        jobs[app]["current"] = current
+                with job_lock:
+                    jobs[app]["output"] = "".join(chunks)[-MAX_OUTPUT:]
+            proc.wait()
+            output = "".join(chunks)
             returncode = proc.returncode
         except Exception as exc:
             output = "ERROR: %s" % exc
@@ -476,7 +492,7 @@ AJAX_SCRIPT = """<script>
  const state=document.getElementById('runstate-'+app);
  async function refresh(){
   try{const r=await fetch('/status?app='+app,{cache:'no-store'});const x=await r.json();
-   state.textContent=x.requested?(x.state.charAt(0).toUpperCase()+x.state.slice(1)+' · '+x.searched+' / '+x.requested+' searched'+(x.detail?' · '+x.detail:'')):'Idle';
+   state.textContent=x.requested?(x.state.charAt(0).toUpperCase()+x.state.slice(1)+(x.running&&x.current?' · Searching '+x.current:'')+' · '+x.searched+' / '+x.requested+' searched'+(x.detail?' · '+x.detail:'')):'Idle';
    form.querySelector('button:not(.stopbtn)').disabled=!!x.running;
    form.querySelector('.stopbtn').disabled=!x.running;
   }catch(e){}
