@@ -44,10 +44,12 @@ def load_controls():
 
 def save_controls(data):
     os.makedirs(os.path.dirname(CONTROL_FILE), exist_ok=True)
-    tmp = CONTROL_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    # CONTROL_FILE may be bind-mounted as a single file in Docker.
+    # Replacing the inode fails with EBUSY on such mounts, so update it in place.
+    with open(CONTROL_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, sort_keys=True)
-    os.replace(tmp, CONTROL_FILE)
+        f.flush()
+        os.fsync(f.fileno())
 
 def app_controls(app):
     data = load_controls()
