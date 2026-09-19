@@ -394,7 +394,7 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
         jobs[app].update(running=True, requested=int(searches_per_run or 0), start=start, proc=None, stopped=False, started=time.time(), finished=None, output="", returncode=None)
     def worker():
         script = OPTIMIZER if app == "radarr" else SONARR_OPTIMIZER
-        cmd = ["python3", script] + (["--live"] if live else [])
+        cmd = ["python3", "-u", script] + (["--live"] if live else [])
         env = os.environ.copy(); env["SMART_OPTIMIZER_CONTROL"] = CONTROL_FILE
         if searches_per_run: env["RADARR_SEARCHES_PER_RUN" if app == "radarr" else "SONARR_SEARCHES_PER_RUN"] = str(searches_per_run)
         output = ""
