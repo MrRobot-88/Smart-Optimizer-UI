@@ -74,7 +74,7 @@ def add_daily_extra(app, amount=50):
     return extras[today]
 
 job_lock = threading.Lock()
-jobs = {a: {"running": False, "requested": 0, "start": 0, "proc": None, "stopped": False, "started": None, "finished": None, "output": ""} for a in ("radarr", "sonarr")}
+jobs = {a: {"running": False, "requested": 0, "start": 0, "proc": None, "stopped": False, "started": None, "finished": None, "output": "", "returncode": None} for a in ("radarr", "sonarr")}
 
 
 def radarr_request(path, method="GET", payload=None):
@@ -370,10 +370,20 @@ def manual_status(app):
     with job_lock:
         snap = dict(jobs[app])
     searched = max(0, search_count(app) - int(snap.get("start") or 0)) if snap.get("started") else 0
-    if not snap.get("started"): state = "idle"
-    elif snap.get("running"): state = "stopping" if snap.get("stopped") else "running"
-    else: state = "stopped" if snap.get("stopped") else "finished"
-    return {"state": state, "searched": searched, "requested": int(snap.get("requested") or 0), "running": bool(snap.get("running"))}
+    requested = int(snap.get("requested") or 0)
+    if not snap.get("started"):
+        state, detail = "idle", ""
+    elif snap.get("running"):
+        state, detail = ("stopping" if snap.get("stopped") else "running"), ""
+    elif snap.get("stopped"):
+        state, detail = "stopped", ""
+    elif snap.get("returncode") not in (None, 0):
+        state, detail = "failed", "Optimizer exited with code %s" % snap.get("returncode")
+    else:
+        state = "finished"
+        detail = "No eligible items" if requested and searched == 0 else ""
+    return {"state": state, "searched": searched, "requested": requested,
+            "running": bool(snap.get("running")), "detail": detail}
 
 def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
     with job_lock:
@@ -381,21 +391,25 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
         if jobs[app]["running"] or jobs[other]["running"]: return False
         start = search_count(app)
         if daily_extra: add_daily_extra(app, daily_extra)
-        jobs[app].update(running=True, requested=int(searches_per_run or 0), start=start, proc=None, stopped=False, started=time.time(), finished=None, output="")
+        jobs[app].update(running=True, requested=int(searches_per_run or 0), start=start, proc=None, stopped=False, started=time.time(), finished=None, output="", returncode=None)
     def worker():
         script = OPTIMIZER if app == "radarr" else SONARR_OPTIMIZER
         cmd = ["python3", script] + (["--live"] if live else [])
         env = os.environ.copy(); env["SMART_OPTIMIZER_CONTROL"] = CONTROL_FILE
         if searches_per_run: env["RADARR_SEARCHES_PER_RUN" if app == "radarr" else "SONARR_SEARCHES_PER_RUN"] = str(searches_per_run)
         output = ""
+        returncode = None
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, start_new_session=True)
             with job_lock:
                 jobs[app]["proc"] = proc; stop_now = jobs[app]["stopped"]
             if stop_now: os.killpg(proc.pid, signal.SIGTERM)
             output, _ = proc.communicate()
-        except Exception as exc: output = "ERROR: %s" % exc
-        with job_lock: jobs[app].update(running=False, finished=time.time(), proc=None, output=(output or "")[-MAX_OUTPUT:])
+            returncode = proc.returncode
+        except Exception as exc:
+            output = "ERROR: %s" % exc
+            returncode = -1
+        with job_lock: jobs[app].update(running=False, finished=time.time(), proc=None, output=(output or "")[-MAX_OUTPUT:], returncode=returncode)
     threading.Thread(target=worker, daemon=True).start(); return True
 
 def stop_optimizer(app):
@@ -462,7 +476,7 @@ AJAX_SCRIPT = """<script>
  const state=document.getElementById('runstate-'+app);
  async function refresh(){
   try{const r=await fetch('/status?app='+app,{cache:'no-store'});const x=await r.json();
-   state.textContent=x.requested?(x.state.charAt(0).toUpperCase()+x.state.slice(1)+' · '+x.searched+' / '+x.requested+' searched'):'Idle';
+   state.textContent=x.requested?(x.state.charAt(0).toUpperCase()+x.state.slice(1)+' · '+x.searched+' / '+x.requested+' searched'+(x.detail?' · '+x.detail:'')):'Idle';
    form.querySelector('button:not(.stopbtn)').disabled=!!x.running;
    form.querySelector('.stopbtn').disabled=!x.running;
   }catch(e){}
