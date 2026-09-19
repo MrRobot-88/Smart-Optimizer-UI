@@ -478,7 +478,7 @@ pre{margin:0;white-space:pre-wrap;word-break:break-word;max-height:305px;overflo
 .dashboard2 .panel{margin-bottom:0;align-self:start}
 .topbar.compact{margin-bottom:16px}
 .controlbar.primary{margin-bottom:8px}
-.ajaxmsg{font-size:.72rem;color:var(--muted)}.queueitem.extra,.changeextra{display:none}.changes{width:100%;table-layout:fixed}.changes .releasecol{width:58%}.changes .sizecol{width:13%}.changes .changecol{width:16%}.changes th,.changes td{overflow:hidden;text-overflow:ellipsis}.changes th:not(:first-child),.changes td:not(:first-child){white-space:nowrap;text-align:right}.changes td:first-child{white-space:nowrap}
+.ajaxmsg{font-size:.72rem;color:var(--muted)}.queueitem.extra,.changeextra{display:none}.changes{width:100%;table-layout:fixed}.changes .releasecol{width:45%}.changes .sizecol{width:18%}.changes .changecol{width:19%}.changes th,.changes td{overflow:hidden;text-overflow:ellipsis}.changes th:not(:first-child),.changes td:not(:first-child){white-space:nowrap;text-align:right}.changes td:first-child{white-space:nowrap}
 @media(max-width:1100px){.grid.five{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:900px){.dashboard2{grid-template-columns:1fr}.grid.five{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}.hero{align-items:flex-start;flex-direction:column}.topbar{align-items:flex-start;flex-direction:column}.nav{width:100%;justify-content:space-between}}
