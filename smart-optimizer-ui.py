@@ -444,11 +444,11 @@ pre{margin:0;white-space:pre-wrap;word-break:break-word;max-height:305px;overflo
 .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:16px}.searchbox{position:relative;flex:1}.searchbox input{width:100%;height:40px;border-radius:10px;border:1px solid var(--line);background:#0f141b;color:var(--text);padding:0 14px 0 38px;outline:none;font-size:.8rem}.searchbox input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.10)}.searchicon{position:absolute;left:13px;top:10px;color:#64748b}.queueitem{padding:14px 17px;border-bottom:1px solid #1f2630}.queueitem.extra{display:none}.queueitem:last-child{border-bottom:0}.qtop{display:flex;justify-content:space-between;gap:12px;align-items:center}.qtitle{font-size:.8rem;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.qmeta{font-size:.7rem;color:var(--muted);margin-top:5px}.progress{height:5px;background:#0b1016;border-radius:99px;overflow:hidden;margin-top:10px}.progress span{display:block;height:100%;background:linear-gradient(90deg,#3b82f6,#8b5cf6);border-radius:99px}.attention{color:var(--warn)}.empty{padding:22px 17px;color:var(--muted);font-size:.78rem}.expandbar{width:100%;height:38px;border:0;border-top:1px solid var(--line);border-radius:0;background:#10161e;color:#9aa6b7;font-size:.74rem;box-shadow:none}.expandbar:hover:not(:disabled){transform:none;background:#151c26;color:#e5e7eb}.controlbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 16px}.controlbox{display:flex;gap:7px;align-items:center;padding:7px 9px;border:1px solid var(--line);border-radius:10px;background:#10151d}.controlbox label{font-size:.7rem;color:var(--muted)}.controlbox input{width:62px;height:32px;border:1px solid #303947;border-radius:7px;background:#0b1016;color:var(--text);padding:0 8px}.controlbox button{height:32px}.sectiontabs{display:flex;gap:5px;margin-bottom:12px}.tab{font-size:.72rem;padding:6px 9px;border-radius:8px;background:#10151d;border:1px solid var(--line);color:#8e99aa}.tab.active{color:#e5e7eb;background:#17202c}.kpi{font-size:.66rem;color:#667085;text-transform:uppercase;letter-spacing:.08em}
 .manualstate{font-size:.78rem;font-weight:700;color:#dbeafe}.stopbtn{border-color:#6b2635;color:#fecdd3}.hint{font-size:.7rem;color:var(--muted)}
 .grid.five{grid-template-columns:repeat(5,minmax(0,1fr))}
-.dashboard2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
-.dashboard2 .panel{margin-bottom:0}
+.dashboard2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;align-items:start}
+.dashboard2 .panel{margin-bottom:0;align-self:start}
 .topbar.compact{margin-bottom:16px}
 .controlbar.primary{margin-bottom:8px}
-.ajaxmsg{font-size:.72rem;color:var(--muted)}
+.ajaxmsg{font-size:.72rem;color:var(--muted)}.queueitem.extra,.changeextra{display:none}
 @media(max-width:1100px){.grid.five{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:900px){.dashboard2{grid-template-columns:1fr}.grid.five{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}.hero{align-items:flex-start;flex-direction:column}.topbar{align-items:flex-start;flex-direction:column}.nav{width:100%;justify-content:space-between}}
@@ -605,13 +605,16 @@ def sonarr_page():
     reduction_pct = (saved / total_before * 100.0) if total_before else 0.0
     last_date = upgrades[0]["date"][:10] if upgrades else "—"
     rows = ""
-    for x in upgrades[:20]:
+    for i, x in enumerate(upgrades[:20]):
         delta = gib(x["saved"])
         cls = "good" if delta >= 0 else "bad"
-        rows += "<tr><td>%s</td><td>%.2f GiB</td><td>%.2f GiB</td><td class='%s'>%+.2f GiB</td></tr>" % (
-            html.escape(x["title"]), gib(x["old"]), gib(x["new"]), cls, delta)
+        extra = " class='changeextra'" if i >= 5 else ""
+        rows += "<tr%s><td>%s</td><td>%.2f GiB</td><td>%.2f GiB</td><td class='%s'>%+.2f GiB</td></tr>" % (
+            extra, html.escape(x["title"]), gib(x["old"]), gib(x["new"]), cls, delta)
     if not rows:
         rows = "<tr><td colspan='4' class='muted'>No completed episode upgrade pairs found in the loaded history window.</td></tr>"
+    elif len(upgrades) > 5:
+        rows += "<tr id='changesExpandRow'><td colspan='4'><button type='button' class='expandbar' id='changesExpand' onclick='toggleChanges()'>Show %d more changes ↓</button></td></tr>" % (min(len(upgrades), 20) - 5)
     qrows = ""
     for i, x in enumerate(queue[:20]):
         size = float(x.get("size") or 0); left = float(x.get("sizeleft") or 0)
@@ -662,6 +665,7 @@ def sonarr_page():
 <div class="footer"><a href="/">Smart Optimizer</a> · Sonarr dashboard</div></div>
 <script>
 let queueOpen=false;function toggleQueue(){queueOpen=!queueOpen;document.querySelectorAll('.queueitem.extra').forEach(el=>el.style.display=queueOpen?'block':'none');const b=document.getElementById('queueExpand');if(b)b.textContent=queueOpen?'Collapse downloads ↑':'Show more downloads ↓';}
+let changesOpen=false;function toggleChanges(){changesOpen=!changesOpen;document.querySelectorAll('.changeextra').forEach(el=>el.style.display=changesOpen?'table-row':'none');const b=document.getElementById('changesExpand');if(b)b.textContent=changesOpen?'Collapse changes ↑':'Show more changes ↓';}
 </script>
 %s
 </body></html>""" % (
