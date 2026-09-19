@@ -478,7 +478,7 @@ pre{margin:0;white-space:pre-wrap;word-break:break-word;max-height:305px;overflo
 .dashboard2 .panel{margin-bottom:0;align-self:start}
 .topbar.compact{margin-bottom:16px}
 .controlbar.primary{margin-bottom:8px}
-.ajaxmsg{font-size:.72rem;color:var(--muted)}.queueitem.extra,.changeextra{display:none}
+.ajaxmsg{font-size:.72rem;color:var(--muted)}.queueitem.extra,.changeextra{display:none}.changes{width:100%;table-layout:fixed}.changes .releasecol{width:58%}.changes .sizecol{width:13%}.changes .changecol{width:16%}.changes th,.changes td{overflow:hidden;text-overflow:ellipsis}.changes th:not(:first-child),.changes td:not(:first-child){white-space:nowrap;text-align:right}.changes td:first-child{white-space:nowrap}
 @media(max-width:1100px){.grid.five{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:900px){.dashboard2{grid-template-columns:1fr}.grid.five{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}.hero{align-items:flex-start;flex-direction:column}.topbar{align-items:flex-start;flex-direction:column}.nav{width:100%;justify-content:space-between}}
@@ -503,7 +503,7 @@ AJAX_SCRIPT = """<script>
    if(!r.ok){state.textContent='Error · '+r.status; return;} await refresh();
   }catch(e){state.textContent='Connection error';}
  });
- refresh(); setInterval(refresh,10000);
+ refresh(); setInterval(refresh,2000);
 })();
 </script>"""
 
@@ -558,7 +558,7 @@ def page():
         qrows += """<button type="button" class="expandbar" id="queueExpand" onclick="toggleQueue()">Show %d more downloads ↓</button>""" % (min(len(queue), 15) - 4)
 
     runstat = manual_status("radarr")
-    runlabel = "Idle" if not runstat["requested"] else ("%s · %d / %d searched" % (runstat["state"].capitalize(), runstat["searched"], runstat["requested"]))
+    runlabel = "Idle" if not runstat["requested"] else ("%s%s · %d / %d searched" % (runstat["state"].capitalize(), (" · Searching " + runstat["current"]) if runstat.get("running") and runstat.get("current") else "", runstat["searched"], runstat["requested"]))
     actions = """<div class="controlbar primary"><form class="controlbox manualform" method="post" action="/manual-search"><input type="hidden" name="app" value="radarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="50"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-radarr" class="manualstate">%s</span></div>
 <form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="radarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", html.escape(runlabel), rule_min, rule_max, used, RADARR_BASE_BUDGET + extra_today, extra_today)
     output = html.escape(snap.get("output") or "No UI-started run yet.")
@@ -581,7 +581,7 @@ def page():
 </div>
 <div class="layout"><div>
 <div class="panel"><div class="panelhead"><div><h3>Recent file changes</h3><p>Observed Radarr upgrade pairs. These are not all necessarily optimizer-triggered.</p></div><a class="badge" href="/radarr/history">HISTORY</a></div>
-<table><thead><tr><th>Release</th><th>Before</th><th>After</th><th>Change</th></tr></thead><tbody>%s</tbody></table></div>
+<table class="changes"><colgroup><col class="releasecol"><col class="sizecol"><col class="sizecol"><col class="changecol"></colgroup><thead><tr><th>Release</th><th>Before</th><th>After</th><th>Change</th></tr></thead><tbody>%s</tbody></table></div>
 <div class="panel"><div class="panelhead"><div><h3>Optimizer activity</h3><p>Output from runs started through this dashboard.</p></div><span class="badge">ACTIVITY</span></div><pre>%s</pre></div>
 </div>
 <div>
