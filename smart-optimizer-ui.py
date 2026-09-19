@@ -441,9 +441,39 @@ pre{margin:0;white-space:pre-wrap;word-break:break-word;max-height:305px;overflo
 .footer{padding-top:22px;text-align:center;font-size:.68rem;color:#4c5667}
 .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:16px}.searchbox{position:relative;flex:1}.searchbox input{width:100%;height:40px;border-radius:10px;border:1px solid var(--line);background:#0f141b;color:var(--text);padding:0 14px 0 38px;outline:none;font-size:.8rem}.searchbox input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.10)}.searchicon{position:absolute;left:13px;top:10px;color:#64748b}.queueitem{padding:14px 17px;border-bottom:1px solid #1f2630}.queueitem.extra{display:none}.queueitem:last-child{border-bottom:0}.qtop{display:flex;justify-content:space-between;gap:12px;align-items:center}.qtitle{font-size:.8rem;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.qmeta{font-size:.7rem;color:var(--muted);margin-top:5px}.progress{height:5px;background:#0b1016;border-radius:99px;overflow:hidden;margin-top:10px}.progress span{display:block;height:100%;background:linear-gradient(90deg,#3b82f6,#8b5cf6);border-radius:99px}.attention{color:var(--warn)}.empty{padding:22px 17px;color:var(--muted);font-size:.78rem}.expandbar{width:100%;height:38px;border:0;border-top:1px solid var(--line);border-radius:0;background:#10161e;color:#9aa6b7;font-size:.74rem;box-shadow:none}.expandbar:hover:not(:disabled){transform:none;background:#151c26;color:#e5e7eb}.controlbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 16px}.controlbox{display:flex;gap:7px;align-items:center;padding:7px 9px;border:1px solid var(--line);border-radius:10px;background:#10151d}.controlbox label{font-size:.7rem;color:var(--muted)}.controlbox input{width:62px;height:32px;border:1px solid #303947;border-radius:7px;background:#0b1016;color:var(--text);padding:0 8px}.controlbox button{height:32px}.sectiontabs{display:flex;gap:5px;margin-bottom:12px}.tab{font-size:.72rem;padding:6px 9px;border-radius:8px;background:#10151d;border:1px solid var(--line);color:#8e99aa}.tab.active{color:#e5e7eb;background:#17202c}.kpi{font-size:.66rem;color:#667085;text-transform:uppercase;letter-spacing:.08em}
 .manualstate{font-size:.78rem;font-weight:700;color:#dbeafe}.stopbtn{border-color:#6b2635;color:#fecdd3}.hint{font-size:.7rem;color:var(--muted)}
+.grid.five{grid-template-columns:repeat(5,minmax(0,1fr))}
+.dashboard2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.dashboard2 .panel{margin-bottom:0}
+.topbar.compact{margin-bottom:16px}
+.controlbar.primary{margin-bottom:8px}
+.ajaxmsg{font-size:.72rem;color:var(--muted)}
+@media(max-width:1100px){.grid.five{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:900px){.dashboard2{grid-template-columns:1fr}.grid.five{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}.hero{align-items:flex-start;flex-direction:column}.topbar{align-items:flex-start;flex-direction:column}.nav{width:100%;justify-content:space-between}}
 @media(max-width:520px){.shell{padding:22px 14px 40px}.grid{grid-template-columns:1fr}.hero h2{font-size:1.45rem}th,td{padding:11px 12px}}
 """
+
+AJAX_SCRIPT = """<script>
+(function(){
+ const form=document.querySelector('.manualform'); if(!form)return;
+ const app=form.querySelector('input[name="app"]').value;
+ const state=document.getElementById('runstate-'+app);
+ async function refresh(){
+  try{const r=await fetch('/status?app='+app,{cache:'no-store'});const x=await r.json();
+   state.textContent=x.requested?(x.state.charAt(0).toUpperCase()+x.state.slice(1)+' · '+x.searched+' / '+x.requested+' searched'):'Idle';
+   form.querySelector('button:not(.stopbtn)').disabled=!!x.running;
+   form.querySelector('.stopbtn').disabled=!x.running;
+  }catch(e){}
+ }
+ form.addEventListener('submit',async function(e){
+  e.preventDefault(); const submit=e.submitter; const target=(submit&&submit.classList.contains('stopbtn'))?'/stop':'/manual-search';
+  try{const r=await fetch(target,{method:'POST',body:new URLSearchParams(new FormData(form)),headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+   if(!r.ok){state.textContent='Error · '+r.status; return;} await refresh();
+  }catch(e){state.textContent='Connection error';}
+ });
+ refresh(); setInterval(refresh,10000);
+})();
+</script>"""
 
 def page():
     state = load_state()
@@ -494,7 +524,7 @@ def page():
 
     runstat = manual_status("radarr")
     runlabel = "Idle" if not runstat["requested"] else ("%s · %d / %d searched" % (runstat["state"].capitalize(), runstat["searched"], runstat["requested"]))
-    actions = """<div class="controlbar"><form class="controlbox" method="post" action="/manual-search"><input type="hidden" name="app" value="radarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="50"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-radarr" class="manualstate">%s</span><span class="hint">Live status updates every 10 seconds.</span></div>
+    actions = """<div class="controlbar primary"><form class="controlbox manualform" method="post" action="/manual-search"><input type="hidden" name="app" value="radarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="50"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-radarr" class="manualstate">%s</span></div>
 <form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="radarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", html.escape(runlabel), rule_min, rule_max, used, RADARR_BASE_BUDGET + extra_today, extra_today)
     output = html.escape(snap.get("output") or "No UI-started run yet.")
     status = runlabel
@@ -503,15 +533,16 @@ def page():
 
     return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0e13"><title>Smart Optimizer UI · Radarr</title><style>%s</style></head>
 <body><div class="shell">
-<div class="topbar"><div class="brand"><div class="mark">R</div><div class="brandcopy"><h1>Radarr Smart Optimizer</h1><div>Library optimization dashboard</div></div></div><div class="nav"><div class="appswitch"><a class="active" href="/radarr">Radarr</a><a href="/sonarr">Sonarr</a></div><span class="status"><span class="dot"></span>%s</span></div></div>
-<div class="hero"><div><h2>Overview</h2><p>See savings, active downloads, problem jobs and optimizer activity in one place.</p></div>%s</div>
+<div class="topbar compact"><div class="brand"><div class="brandcopy"><h1>Radarr Optimizer</h1><div>Find smaller releases for your movies while keeping quality.</div></div></div><div class="nav"><div class="appswitch"><a class="active" href="/radarr">Radarr</a><a href="/sonarr">Sonarr</a></div><span class="status"><span class="dot"></span>%s</span></div></div>
+%s
 %s%s
 <div class="toolbar"><div class="searchbox"><span class="searchicon">⌕</span><input id="librarySearch" autocomplete="off" placeholder="Search releases and current downloads…"></div></div>
-<div class="grid">
+<div class="grid five">
 <div class="stat"><div class="stathead"><span><span class="mini">↘</span>Storage saved</span></div><div class="value %s">%+.2f GiB</div><div class="sub">Observed across loaded upgrade history</div></div>
 <div class="stat"><div class="stathead"><span><span class="mini">✓</span>Space reductions</span></div><div class="value">%d</div><div class="sub">Observed upgrades that ended smaller</div></div>
 <div class="stat"><div class="stathead"><span><span class="mini">↓</span>Active downloads</span></div><div class="value">%d</div><div class="sub">%d need attention · %d optimizer import blocked</div></div>
 <div class="stat"><div class="stathead"><span><span class="mini">⌕</span>Searches today</span></div><div class="value">%d</div><div class="sub">Optimizer state counter</div></div>
+<div class="stat"><div class="stathead"><span><span class="mini">◷</span>Temporary extra today</span></div><div class="value">+%d</div><div class="sub">Resets tomorrow</div></div>
 </div>
 <div class="layout"><div>
 <div class="panel"><div class="panelhead"><div><h3>Recent file changes</h3><p>Observed Radarr upgrade pairs. These are not all necessarily optimizer-triggered.</p></div><span class="badge">HISTORY</span></div>
@@ -538,14 +569,14 @@ const box=document.getElementById('librarySearch');
 box.addEventListener('input',()=>{const q=box.value.trim().toLowerCase();document.querySelectorAll('.filterrow').forEach(el=>{const match=!q||((el.dataset.search||'').includes(q));if(el.classList.contains('extra')&&!queueOpen&&!q){el.style.display='none';}else{el.style.display=match?'':'none';}});});
 </script><script>
 (function(){var el=document.querySelector('[id^="runstate-"]');if(!el)return;var app=el.id.replace('runstate-','');async function tick(){try{var r=await fetch('/status?app='+app,{cache:'no-store'});var x=await r.json();el.textContent=x.requested?(x.state.charAt(0).toUpperCase()+x.state.slice(1)+' · '+x.searched+' / '+x.requested+' searched'):'Idle';}catch(e){}}tick();setInterval(tick,10000);})();
-</script></body></html>""" % (
+</script>%s</body></html>""" % (
         CSS, html.escape(status), actions, warning, err,
         "good" if saved >= 0 else "bad", gib(saved), positive,
-        len(queue), len(attention), len(optimizer_blocked), used, rows, output, len(queue), qrows,
+        len(queue), len(attention), len(optimizer_blocked), used, extra_today, rows, output, len(queue), qrows,
         "good" if reduction_pct >= 0 else "bad", reduction_pct, positive,
         "bad" if attention else "good", len(attention),
         "bad" if optimizer_blocked else "good", len(optimizer_blocked), html.escape(last_date),
-        html.escape(status), "Actions enabled" if ENABLE_ACTIONS else "Read-only")
+        html.escape(status), "Actions enabled" if ENABLE_ACTIONS else "Read-only", AJAX_SCRIPT)
 
 
 
@@ -568,6 +599,9 @@ def sonarr_page():
         error = str(exc)
     saved = sum(x["saved"] for x in upgrades)
     positive = sum(1 for x in upgrades if x["saved"] > 0)
+    total_before = sum(x["old"] for x in upgrades)
+    reduction_pct = (saved / total_before * 100.0) if total_before else 0.0
+    last_date = upgrades[0]["date"][:10] if upgrades else "—"
     rows = ""
     for x in upgrades[:20]:
         delta = gib(x["saved"])
@@ -577,33 +611,62 @@ def sonarr_page():
     if not rows:
         rows = "<tr><td colspan='4' class='muted'>No completed episode upgrade pairs found in the loaded history window.</td></tr>"
     qrows = ""
-    for x in queue[:20]:
+    for i, x in enumerate(queue[:20]):
         size = float(x.get("size") or 0); left = float(x.get("sizeleft") or 0)
         progress = max(0.0, min(100.0, ((size-left)/size*100.0) if size else 0.0))
         title = x.get("title") or ("Episode ID %s" % x.get("episodeId"))
         status = x.get("status") or x.get("trackedDownloadStatus") or "unknown"
-        qrows += "<div class='queueitem'><div class='qtop'><div class='qtitle'>%s</div><div>%s</div></div><div class='qmeta'>%.1f%%</div><div class='progress'><span style='width:%.1f%%'></span></div></div>" % (
-            html.escape(str(title)), html.escape(str(status)), progress, progress)
+        extra = " extra" if i >= 4 else ""
+        qrows += "<div class='queueitem%s'><div class='qtop'><div class='qtitle'>%s</div><div>%s</div></div><div class='qmeta'>%.1f%%</div><div class='progress'><span style='width:%.1f%%'></span></div></div>" % (
+            extra, html.escape(str(title)), html.escape(str(status)), progress, progress)
     if not qrows:
         qrows = "<div class='empty'>Nothing is currently in Sonarr's download queue.</div>"
+    elif len(queue) > 4:
+        qrows += "<button type='button' class='expandbar' id='queueExpand' onclick='toggleQueue()'>Show %d more downloads ↓</button>" % (min(len(queue), 20) - 4)
     runstat = manual_status("sonarr")
     runlabel = "Idle" if not runstat["requested"] else ("%s · %d / %d searched" % (runstat["state"].capitalize(), runstat["searched"], runstat["requested"]))
-    son_actions = """<div class="controlbar"><form class="controlbox" method="post" action="/manual-search"><input type="hidden" name="app" value="sonarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="50"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-sonarr" class="manualstate">%s</span><span class="hint">Live status updates every 10 seconds.</span></div>
+    son_actions = """<div class="controlbar primary"><form class="controlbox manualform" method="post" action="/manual-search"><input type="hidden" name="app" value="sonarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="50"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-sonarr" class="manualstate">%s</span></div>
 <form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="sonarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span><span class="badge">UHD 1080→2160 exception unchanged</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", html.escape(runlabel), rule_min, rule_max, used, SONARR_BASE_BUDGET + extra_today, extra_today)
     err = ("<div class='notice bad'>Sonarr API error: %s</div>" % html.escape(error)) if error else ""
     return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer UI · Sonarr</title><style>%s</style></head><body><div class="shell">
-<div class="topbar"><div class="brand"><div class="mark">S</div><div class="brandcopy"><h1>Sonarr Smart Optimizer</h1><div>Episode optimization dashboard</div></div></div><div class="nav"><div class="appswitch"><a href="/radarr">Radarr</a><a class="active" href="/sonarr">Sonarr</a></div><span class="status"><span class="dot"></span>Idle</span></div></div>
-<div class="hero"><div><h2>Overview</h2><p>See episode savings, active downloads and optimizer activity in one place.</p></div></div>%s%s
-<div class="grid"><div class="stat"><div class="stathead"><span><span class="mini">↘</span>Storage saved</span></div><div class="value %s">%+.2f GiB</div><div class="sub">Observed across loaded Sonarr upgrade history</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">✓</span>Space reductions</span></div><div class="value">%d</div><div class="sub">Episode replacements that ended smaller</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">↓</span>Active downloads</span></div><div class="value">%d</div><div class="sub">Current Sonarr queue</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">⌕</span>Searches today</span></div><div class="value">%d</div><div class="sub">Optimizer state counter</div></div></div>
-<div class="layout"><div><div class="panel"><div class="panelhead"><div><h3>Recent episode changes</h3><p>Observed Sonarr upgrade pairs; not all are necessarily optimizer-triggered.</p></div><span class="badge">HISTORY</span></div><table><thead><tr><th>Release</th><th>Before</th><th>After</th><th>Change</th></tr></thead><tbody>%s</tbody></table></div></div>
-<div><div class="panel"><div class="panelhead"><div><h3>Download radar</h3><p>Live Sonarr queue.</p></div><span class="badge">%d ACTIVE</span></div>%s</div></div></div>
-<div class="footer"><a href="/">Smart Optimizer</a> · Sonarr dashboard</div></div><script>
-(function(){var el=document.querySelector('[id^="runstate-"]');if(!el)return;var app=el.id.replace('runstate-','');async function tick(){try{var r=await fetch('/status?app='+app,{cache:'no-store'});var x=await r.json();el.textContent=x.requested?(x.state.charAt(0).toUpperCase()+x.state.slice(1)+' · '+x.searched+' / '+x.requested+' searched'):'Idle';}catch(e){}}tick();setInterval(tick,10000);})();
-</script></body></html>""" % (
-        CSS, son_actions, err, "good" if saved >= 0 else "bad", gib(saved), positive, len(queue), used, rows, len(queue), qrows)
+<div class="topbar compact"><div class="brand"><div class="brandcopy"><h1>Sonarr Optimizer</h1><div>Find smaller releases for your episodes while keeping quality.</div></div></div><div class="nav"><div class="appswitch"><a href="/radarr">Radarr</a><a class="active" href="/sonarr">Sonarr</a></div></div></div>
+%s%s
+<div class="grid five">
+<div class="stat"><div class="stathead"><span><span class="mini">↘</span>Storage saved</span></div><div class="value %s">%+.2f GiB</div></div>
+<div class="stat"><div class="stathead"><span><span class="mini">✓</span>Reductions</span></div><div class="value">%d</div></div>
+<div class="stat"><div class="stathead"><span><span class="mini">↓</span>Active downloads</span></div><div class="value">%d</div></div>
+<div class="stat"><div class="stathead"><span><span class="mini">⌕</span>Searches today</span></div><div class="value">%d</div></div>
+<div class="stat"><div class="stathead"><span><span class="mini">◷</span>Temporary extra today</span></div><div class="value">+%d</div></div>
+</div>
+<div class="dashboard2">
+<div class="panel"><div class="panelhead"><div><h3>Download radar</h3><p>Live Sonarr queue.</p></div><span class="badge">%d ACTIVE</span></div>%s</div>
+<div class="panel"><div class="panelhead"><div><h3>Recent changes</h3><p>Latest optimized episodes and their size changes.</p></div><span class="badge">HISTORY</span></div><table><thead><tr><th>Release</th><th>Before</th><th>After</th><th>Change</th></tr></thead><tbody>%s</tbody></table></div>
+</div>
+<div class="dashboard2">
+<div class="panel"><div class="panelhead"><div><h3>Optimizer intelligence</h3><p>Useful context without pretending Sonarr history equals optimizer success.</p></div><span class="badge">SUMMARY</span></div><div class="sidecontent">
+<div class="metricline"><span>Observed net reduction</span><b class="%s">%.1f%%</b></div>
+<div class="metricline"><span>Total smaller replacements</span><b>%d</b></div>
+<div class="metricline"><span>Active downloads</span><b>%d</b></div>
+<div class="metricline"><span>Last observed upgrade</span><b>%s</b></div>
+</div></div>
+<div class="panel"><div class="panelhead"><div><h3>Settings &amp; status</h3><p>Current configuration and system status.</p></div><span class="badge">CONFIG</span></div><div class="sidecontent">
+<div class="metricline"><span>Downsize range</span><b>%.1f – %.1f%%</b></div>
+<div class="metricline"><span>UHD (1080 → 2160) exception</span><b>Enabled (unchanged)</b></div>
+<div class="metricline"><span>Daily search budget</span><b>%d</b></div>
+<div class="metricline"><span>Temporary extra searches</span><b>%d</b></div>
+<div class="metricline"><span>Status</span><b class="good">Ready</b></div>
+</div></div>
+</div>
+<div class="footer"><a href="/">Smart Optimizer</a> · Sonarr dashboard</div></div>
+<script>
+let queueOpen=false;function toggleQueue(){queueOpen=!queueOpen;document.querySelectorAll('.queueitem.extra').forEach(el=>el.style.display=queueOpen?'block':'none');const b=document.getElementById('queueExpand');if(b)b.textContent=queueOpen?'Collapse downloads ↑':'Show more downloads ↓';}
+</script>
+%s
+</body></html>""" % (
+        CSS, son_actions, err, "good" if saved >= 0 else "bad", gib(saved), positive, len(queue), used, extra_today,
+        len(queue), qrows, rows, "good" if reduction_pct >= 0 else "bad", reduction_pct, positive, len(queue),
+        html.escape(last_date), rule_min, rule_max, SONARR_BASE_BUDGET, extra_today, AJAX_SCRIPT)
+
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
