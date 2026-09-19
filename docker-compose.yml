@@ -1,0 +1,24 @@
+services:
+  smart-optimizer-ui:
+    build: .
+    container_name: smart-optimizer-ui
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      SMART_UI_HOST: 0.0.0.0
+      SMART_UI_PORT: 8788
+      RADARR_URL: http://127.0.0.1:7272
+      SONARR_URL: http://127.0.0.1:8989
+      RADARR_OPTIMIZER_SCRIPT: /optimizers/radarr.py
+      SONARR_OPTIMIZER_SCRIPT: /optimizers/sonarr.py
+      RADARR_OPTIMIZER_STATE: /data/radarr-state.json
+      SONARR_OPTIMIZER_STATE: /data/sonarr-state.json
+      SMART_OPTIMIZER_CONTROL: /config/smart-optimizer-control.json
+      RADARR_DAILY_SEARCH_BUDGET: 400
+      SONARR_DAILY_SEARCH_BUDGET: 400
+    volumes:
+      - /volume1/WDBLACK/radarr-smart-optimizer.py:/optimizers/radarr.py:ro
+      - /volume1/WDBLACK/sonarr-smart-optimizer.py:/optimizers/sonarr.py:ro
+      - /volume1/WDBLACK/radarr-smart-optimizer-state.json:/data/radarr-state.json
+      - /volume1/WDBLACK/sonarr-smart-optimizer-state.json:/data/sonarr-state.json
+      - /volume1/WDBLACK/ContainerConfigs/Smart-Optimizer-UI/smart-optimizer-control.json:/config/smart-optimizer-control.json
