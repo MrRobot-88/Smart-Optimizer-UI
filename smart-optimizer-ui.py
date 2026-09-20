@@ -422,10 +422,15 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
                 # Avoid whitespace-regex escaping issues: locate the SxxExx token,
                 # then derive the series title from the text before it.
                 match = re.search(r"S([0-9]{2})E([0-9]{2})", clean)
-                if match and ". " in clean[:match.start()]:
+                if app == "sonarr" and match and ". " in clean[:match.start()]:
                     before = clean[:match.start()].strip()
                     title = before.split(". ", 1)[1].strip()
                     current = "%s · S%sE%s" % (title, match.group(1), match.group(2))
+                    with job_lock:
+                        jobs[app]["current"] = current
+                        jobs[app]["last"] = current
+                elif app == "radarr" and "NOW CHECKING:" in clean:
+                    current = clean.split("NOW CHECKING:", 1)[1].strip()
                     with job_lock:
                         jobs[app]["current"] = current
                         jobs[app]["last"] = current
