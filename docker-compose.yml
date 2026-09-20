@@ -5,7 +5,7 @@ services:
     network_mode: host
     restart: unless-stopped
     environment:
-      TZ: Europe/Stockholm
+      TZ: ${TZ:-UTC}
       SMART_UI_HOST: 0.0.0.0
       SMART_UI_PORT: 8788
       RADARR_DAILY_SEARCH_BUDGET: 400
