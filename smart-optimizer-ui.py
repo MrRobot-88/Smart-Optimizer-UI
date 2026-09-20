@@ -429,7 +429,7 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
                     with job_lock:
                         jobs[app]["current"] = current
                         jobs[app]["last"] = current
-                progress = re.search(r"SEARCH PROGRESS:\\s*([0-9]+)\\s*/\\s*([0-9]+)", clean)
+                progress = re.search(r"SEARCH PROGRESS:\s*([0-9]+)\s*/\s*([0-9]+)", clean)
                 if progress:
                     with job_lock:
                         jobs[app]["display_searched"] = int(progress.group(1))
