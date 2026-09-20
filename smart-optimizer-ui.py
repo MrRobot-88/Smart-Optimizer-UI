@@ -518,11 +518,9 @@ AJAX_SCRIPT = """<script>
    const word=x.state.charAt(0).toUpperCase()+x.state.slice(1);
    const main=x.requested?(word+' · '+x.searched+' / '+x.requested+' searched'+(x.detail?' · '+x.detail:'')):'Idle';
    const now=x.running&&x.current?('Now checking: '+x.current):'';
-   const last=!x.running&&x.last?('Last checked: '+x.last):'';
    const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
    state.innerHTML='<span class="runmain">'+esc(main)+'</span>'
-     +(now?'<span class="runitem">'+esc(now)+'</span>':'')
-     +(last?'<span class="runitem">'+esc(last)+'</span>':'');
+     +(now?'<span class="runitem">'+esc(now)+'</span>':'');
    form.querySelector('button:not(.stopbtn)').disabled=!!x.running;
    form.querySelector('.stopbtn').disabled=!x.running;
   }catch(e){}
@@ -725,8 +723,6 @@ def sonarr_page():
     runlabel = "Idle" if not runstat["requested"] else ("%s · %d / %d searched" % (runstat["state"].capitalize(), runstat["searched"], runstat["requested"]))
     if runstat.get("running") and runstat.get("current"):
         runlabel += "<span class='runitem'>Now checking: %s</span>" % html.escape(runstat["current"])
-    elif not runstat.get("running") and runstat.get("last"):
-        runlabel += "<span class='runitem'>Last checked: %s</span>" % html.escape(runstat["last"])
     son_actions = """<div class="controlbar primary"><form class="controlbox manualform" method="post" action="/manual-search"><input type="hidden" name="app" value="sonarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="50"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-sonarr" class="manualstate">%s</span></div>
 <form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="sonarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span><span class="badge">UHD 1080→2160 exception unchanged</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", runlabel, rule_min, rule_max, used, SONARR_BASE_BUDGET + extra_today, extra_today)
     err = ("<div class='notice bad'>Sonarr API error: %s</div>" % html.escape(error)) if error else ""
