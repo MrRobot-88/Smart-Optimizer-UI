@@ -804,9 +804,9 @@ def sonarr_page():
     for i, x in enumerate(upgrades[:15]):
         delta = gib(x["saved"])
         cls = "good" if delta >= 0 else "bad"
-        extra = " class='changeextra'" if i >= 5 else ""
-        rows += "<tr%s><td>%s</td><td>%.2f GiB</td><td>%.2f GiB</td><td class='%s'>%+.2f GiB</td></tr>" % (
-            extra, html.escape(x["title"]), gib(x["old"]), gib(x["new"]), cls, delta)
+        extra = " changeextra" if i >= 5 else ""
+        rows += "<tr class='filterrow%s' data-search='%s'><td>%s</td><td>%.2f GiB</td><td>%.2f GiB</td><td class='%s'>%+.2f GiB</td></tr>" % (
+            extra, html.escape(x["title"].lower(), quote=True), html.escape(x["title"]), gib(x["old"]), gib(x["new"]), cls, delta)
     if not rows:
         rows = "<tr><td colspan='4' class='muted'>No completed episode upgrade pairs found in the loaded history window.</td></tr>"
     elif len(upgrades) > 5:
@@ -818,8 +818,8 @@ def sonarr_page():
         title = x.get("title") or ("Episode ID %s" % x.get("episodeId"))
         status = x.get("status") or x.get("trackedDownloadStatus") or "unknown"
         extra = " extra" if i >= 4 else ""
-        qrows += "<div class='queueitem%s'><div class='qtop'><div class='qtitle'>%s</div><div>%s</div></div><div class='qmeta'>%.1f%%</div><div class='progress'><span style='width:%.1f%%'></span></div></div>" % (
-            extra, html.escape(str(title)), html.escape(str(status)), progress, progress)
+        qrows += "<div class='queueitem filterrow%s' data-search='%s'><div class='qtop'><div class='qtitle'>%s</div><div>%s</div></div><div class='qmeta'>%.1f%%</div><div class='progress'><span style='width:%.1f%%'></span></div></div>" % (
+            extra, html.escape(str(title).lower(), quote=True), html.escape(str(title)), html.escape(str(status)), progress, progress)
     if not qrows:
         qrows = "<div class='empty'>Nothing is currently in Sonarr's download queue.</div>"
     elif len(queue) > 4:
@@ -837,6 +837,7 @@ def sonarr_page():
     return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer UI · Sonarr</title><style>%s</style></head><body><div class="shell">
 <div class="topbar compact"><div class="brand"><div class="brandcopy"><h1>Sonarr Optimizer</h1><div>Find smaller releases for your episodes while keeping quality.</div></div></div><div class="nav"><div class="appswitch"><a href="/radarr">Radarr</a><a class="active" href="/sonarr">Sonarr</a></div><span class="status%s"><span class="dot"></span>%s</span></div></div>
 %s%s
+<div class="toolbar"><div class="searchbox"><span class="searchicon">⌕</span><input id="librarySearch" autocomplete="off" placeholder="Search releases and current downloads…"></div></div>
 <div class="grid five">
 <div class="stat"><div class="stathead"><span><span class="mini">↘</span>Storage saved</span></div><div class="value %s">%+.2f GiB</div><div class="sub">Observed across loaded upgrade history</div></div>
 <div class="stat"><div class="stathead"><span><span class="mini">✓</span>Reductions</span></div><div class="value">%d</div><div class="sub">Observed upgrades that ended smaller</div></div>
@@ -867,6 +868,8 @@ def sonarr_page():
 <script>
 let queueOpen=false;function toggleQueue(){const b=document.getElementById('queueExpand');if(queueOpen){location.href='/sonarr/history';return;}queueOpen=true;document.querySelectorAll('.queueitem.extra').forEach(el=>el.style.display='block');if(b)b.textContent='History →';}
 let changesOpen=false;function toggleChanges(){const b=document.getElementById('changesExpand');if(changesOpen){location.href='/sonarr/history';return;}changesOpen=true;document.querySelectorAll('.changeextra').forEach(el=>el.style.display='table-row');if(b)b.textContent='History →';}
+const box=document.getElementById('librarySearch');
+box.addEventListener('input',()=>{const q=box.value.trim().toLowerCase();document.querySelectorAll('.filterrow').forEach(el=>{const match=!q||((el.dataset.search||'').includes(q));if(el.classList.contains('extra')&&!queueOpen&&!q){el.style.display='none';}else if(el.classList.contains('changeextra')&&!changesOpen&&!q){el.style.display='none';}else{el.style.display=match?'':'none';}});});
 </script>
 %s
 </body></html>""" % (
