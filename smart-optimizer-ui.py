@@ -95,6 +95,13 @@ def test_connection(app, scheme=None, host=None, port=None, api_key=None):
         data = json.loads(response.read().decode("utf-8") or "{}")
     return str(data.get("version") or "connected")
 
+def api_online(app):
+    try:
+        test_connection(app)
+        return True
+    except Exception:
+        return False
+
 def load_controls():
     try:
         with open(CONTROL_FILE, "r", encoding="utf-8") as f:
@@ -573,6 +580,7 @@ pre{margin:0;white-space:pre-wrap;word-break:break-word;max-height:305px;overflo
 @media(max-width:1100px){.grid.five{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:900px){.dashboard2{grid-template-columns:1fr}.grid.five{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}.hero{align-items:flex-start;flex-direction:column}.topbar{align-items:flex-start;flex-direction:column}.nav{width:100%;justify-content:space-between}}
+.status.bad{color:#ff8b8b}.status.bad .dot{background:#ff5f67;box-shadow:0 0 12px rgba(255,95,103,.55)}
 @media(max-width:520px){.shell{padding:22px 14px 40px}.grid{grid-template-columns:1fr}.hero h2{font-size:1.45rem}th,td{padding:11px 12px}}
 """
 
@@ -660,13 +668,13 @@ def page():
     actions = """<div class="controlbar primary"><form class="controlbox manualform" method="post" action="/manual-search"><input type="hidden" name="app" value="radarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="50"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-radarr" class="manualstate">%s</span></div>
 <form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="radarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", html.escape(runlabel), rule_min, rule_max, used, RADARR_BASE_BUDGET + extra_today, extra_today)
     output = html.escape(snap.get("output") or "No UI-started run yet.")
-    status = runlabel
+    status = "Online" if api_online("radarr") else "Offline"
     warning = "" if ENABLE_ACTIONS else "<div class='notice'>Read-only mode is active. Smart retry controls will only be enabled after we validate queue detection and candidate selection.</div>"
     err = ("<div class='notice bad'>Radarr API error: %s</div>" % html.escape(error)) if error else ""
 
     return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0e13"><title>Smart Optimizer UI · Radarr</title><style>%s</style></head>
 <body><div class="shell">
-<div class="topbar compact"><div class="brand"><div class="brandcopy"><h1>Radarr Optimizer</h1><div>Find smaller releases for your movies while keeping quality.</div></div></div><div class="nav"><div class="appswitch"><a class="active" href="/radarr">Radarr</a><a href="/sonarr">Sonarr</a></div><span class="status"><span class="dot"></span>%s</span></div></div>
+<div class="topbar compact"><div class="brand"><div class="brandcopy"><h1>Radarr Optimizer</h1><div>Find smaller releases for your movies while keeping quality.</div></div></div><div class="nav"><div class="appswitch"><a class="active" href="/radarr">Radarr</a><a href="/sonarr">Sonarr</a></div><span class="status%s"><span class="dot"></span>%s</span></div></div>
 %s
 %s%s
 <div class="toolbar"><div class="searchbox"><span class="searchicon">⌕</span><input id="librarySearch" autocomplete="off" placeholder="Search releases and current downloads…"></div></div>
@@ -704,7 +712,7 @@ box.addEventListener('input',()=>{const q=box.value.trim().toLowerCase();documen
 </script><script>
 (function(){var el=document.querySelector('[id^="runstate-"]');if(!el)return;var app=el.id.replace('runstate-','');async function tick(){try{var r=await fetch('/status?app='+app,{cache:'no-store'});var x=await r.json();el.textContent=x.requested?(x.state.charAt(0).toUpperCase()+x.state.slice(1)+' · '+x.searched+' / '+x.requested+' searched'):'Idle';}catch(e){}}tick();setInterval(tick,10000);})();
 </script>%s</body></html>""" % (
-        CSS, html.escape(status), actions, warning, err,
+        CSS, "" if status == "Online" else " bad", html.escape(status), actions, warning, err,
         "good" if saved >= 0 else "bad", gib(saved), positive,
         len(queue), len(attention), len(optimizer_blocked), used, extra_today, rows, output, len(queue), qrows,
         "good" if reduction_pct >= 0 else "bad", reduction_pct, positive,
@@ -825,8 +833,9 @@ def sonarr_page():
     son_actions = """<div class="controlbar primary"><form class="controlbox manualform" method="post" action="/manual-search"><input type="hidden" name="app" value="sonarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="50"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-sonarr" class="manualstate">%s</span></div>
 <form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="sonarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span><span class="badge">UHD 1080→2160 exception unchanged</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", runlabel, rule_min, rule_max, used, SONARR_BASE_BUDGET + extra_today, extra_today)
     err = ("<div class='notice bad'>Sonarr API error: %s</div>" % html.escape(error)) if error else ""
+    connection_status = "Online" if api_online("sonarr") else "Offline"
     return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer UI · Sonarr</title><style>%s</style></head><body><div class="shell">
-<div class="topbar compact"><div class="brand"><div class="brandcopy"><h1>Sonarr Optimizer</h1><div>Find smaller releases for your episodes while keeping quality.</div></div></div><div class="nav"><div class="appswitch"><a href="/radarr">Radarr</a><a class="active" href="/sonarr">Sonarr</a></div></div></div>
+<div class="topbar compact"><div class="brand"><div class="brandcopy"><h1>Sonarr Optimizer</h1><div>Find smaller releases for your episodes while keeping quality.</div></div></div><div class="nav"><div class="appswitch"><a href="/radarr">Radarr</a><a class="active" href="/sonarr">Sonarr</a></div><span class="status%s"><span class="dot"></span>%s</span></div></div>
 %s%s
 <div class="grid five">
 <div class="stat"><div class="stathead"><span><span class="mini">↘</span>Storage saved</span></div><div class="value %s">%+.2f GiB</div><div class="sub">Observed across loaded upgrade history</div></div>
@@ -861,7 +870,7 @@ let changesOpen=false;function toggleChanges(){const b=document.getElementById('
 </script>
 %s
 </body></html>""" % (
-        CSS, son_actions, err, "good" if saved >= 0 else "bad", gib(saved), positive, len(queue), used, extra_today,
+        CSS, "" if connection_status == "Online" else " bad", html.escape(connection_status), son_actions, err, "good" if saved >= 0 else "bad", gib(saved), positive, len(queue), used, extra_today,
         rows, rule_min, rule_max, SONARR_BASE_BUDGET, extra_today, len(queue), qrows,
         "good" if reduction_pct >= 0 else "bad", reduction_pct, positive, len(queue),
         html.escape(last_date), AJAX_SCRIPT)
