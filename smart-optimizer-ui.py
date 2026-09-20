@@ -390,8 +390,8 @@ def manual_status(app):
         display_item = str(snap.get("last") or display_item)
     return {"state": state, "searched": display_searched if snap.get("started") else searched,
             "requested": requested, "running": bool(snap.get("running")), "detail": detail,
-            "current": display_item if snap.get("running") else "",
-            "last": display_item if not snap.get("running") else ""}
+            "current": str(snap.get("current") or "") if snap.get("running") else "",
+            "last": display_item}
 
 def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
     with job_lock:
@@ -511,9 +511,12 @@ AJAX_SCRIPT = """<script>
   try{const r=await fetch('/status?app='+app,{cache:'no-store'});const x=await r.json();
    const word=x.state.charAt(0).toUpperCase()+x.state.slice(1);
    const main=x.requested?(word+' · '+x.searched+' / '+x.requested+' searched'+(x.detail?' · '+x.detail:'')):'Idle';
-   const item=x.running&&x.current?('Now checking: '+x.current):(!x.running&&x.last?('Last checked: '+x.last):'');
+   const now=x.running&&x.current?('Now checking: '+x.current):'';
+   const last=x.last?('Last checked: '+x.last):'';
    const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-   state.innerHTML='<span class="runmain">'+esc(main)+'</span>'+(item?'<span class="runitem">'+esc(item)+'</span>':'');
+   state.innerHTML='<span class="runmain">'+esc(main)+'</span>'
+     +(now?'<span class="runitem">'+esc(now)+'</span>':'')
+     +(last?'<span class="runitem">'+esc(last)+'</span>':'');
    form.querySelector('button:not(.stopbtn)').disabled=!!x.running;
    form.querySelector('.stopbtn').disabled=!x.running;
   }catch(e){}
