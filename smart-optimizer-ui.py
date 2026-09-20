@@ -146,6 +146,14 @@ def app_controls(app):
     today = time.strftime("%Y-%m-%d")
     return float(c.get("min_saving_percent", 5.0)), float(c.get("max_saving_percent", 50.0)), int((c.get("daily_extra") or {}).get(today, 0))
 
+def optimized_tag_enabled(app):
+    return bool((load_controls().get(app, {}) or {}).get("optimized_tag", False))
+
+def update_optimized_tag(app, enabled):
+    data = load_controls(); c = data.setdefault(app, {})
+    c["optimized_tag"] = bool(enabled)
+    save_controls(data)
+
 def update_saving_window(app, minimum, maximum):
     if not (0 <= minimum <= maximum <= 100):
         raise ValueError("Use 0-100%, and minimum cannot be greater than maximum.")
@@ -332,6 +340,62 @@ def queue_health(rows):
     return result
 
 
+
+def ui_dynamic_range_from_text(text):
+    """Conservative HDR/DV classifier used by forced-import safety checks."""
+    t = str(text or "").lower()
+    dv = bool(re.search(r"(?<![a-z0-9])(dv|dovi)(?![a-z0-9])|dolby[\s._-]?vision", t))
+    hdr = bool(re.search(r"(?<![a-z0-9])(hdr10\+?|hdr|hlg)(?![a-z0-9])", t))
+    if dv and hdr:
+        return "DV_HDR"
+    if dv:
+        return "DV_ONLY"
+    if hdr:
+        return "HDR"
+    return "SDR_UNKNOWN"
+
+def ui_dynamic_range_allowed(current, candidate):
+    if candidate == "DV_ONLY":
+        return False
+    if current == "DV_HDR":
+        return candidate == "DV_HDR"
+    if current == "HDR":
+        return candidate in ("HDR", "DV_HDR")
+    return candidate in ("SDR_UNKNOWN", "HDR", "DV_HDR")
+
+def ui_audio_channels_from_text(text):
+    t = str(text or "").lower()
+    for channels, pattern in (
+        (7.1, r"\b7[\s._-]?1\b"),
+        (5.1, r"\b5[\s._-]?1\b"),
+        (2.1, r"\b2[\s._-]?1\b"),
+        (2.0, r"\b2[\s._-]?0\b"),
+        (1.0, r"\b1[\s._-]?0\b"),
+    ):
+        if re.search(pattern, t):
+            return channels
+    return 2.0 if "stereo" in t else None
+
+def ui_current_media_traits(movie_file):
+    media = (movie_file or {}).get("mediaInfo") or {}
+    text = " ".join([
+        str(media.get("videoDynamicRange") or ""),
+        str(media.get("videoDynamicRangeType") or ""),
+        str(media.get("audioCodec") or ""),
+        str((movie_file or {}).get("sceneName") or ""),
+        str((movie_file or {}).get("relativePath") or ""),
+    ])
+    try:
+        channels = float(media.get("audioChannels") or 0) or None
+    except (TypeError, ValueError):
+        channels = None
+    return {
+        "dynamic_range": ui_dynamic_range_from_text(text),
+        "channels": channels or ui_audio_channels_from_text(text),
+        "atmos": "atmos" in text.lower(),
+    }
+
+
 def repair_import(queue_id):
     """Reprocess one completed Radarr queue item using COPY mode.
 
@@ -368,6 +432,14 @@ def repair_import(queue_id):
     if int(new_res) == int(old_res) and new_size >= old_size:
         raise RuntimeError("Refusing same-resolution replacement that is not smaller")
 
+    saving = ((old_size - new_size) / float(old_size)) * 100.0
+    rule_min, rule_max, _ = app_controls("radarr")
+    if saving < rule_min or saving > rule_max:
+        raise RuntimeError("Refusing import outside %.1f%%-%.1f%% saving window (%.1f%%)" %
+                           (rule_min, rule_max, saving))
+
+    current_traits = ui_current_media_traits(old_file)
+
     download_id = str(row.get("downloadId") or "")
     if not download_id:
         raise RuntimeError("Queue item has no downloadId")
@@ -388,6 +460,26 @@ def repair_import(queue_id):
         raise RuntimeError("Expected exactly one safely reprocessable video file, found %d" % len(usable))
 
     item = usable[0]
+
+    candidate_text = " ".join([
+        str(row.get("title") or ""),
+        str(item.get("path") or ""),
+        str(item.get("relativePath") or ""),
+        str(item.get("releaseGroup") or ""),
+    ])
+    candidate_dr = ui_dynamic_range_from_text(candidate_text)
+    candidate_channels = ui_audio_channels_from_text(candidate_text)
+    candidate_atmos = "atmos" in candidate_text.lower()
+
+    if not ui_dynamic_range_allowed(current_traits["dynamic_range"], candidate_dr):
+        raise RuntimeError("Refusing HDR/Dolby Vision downgrade (%s -> %s)" %
+                           (current_traits["dynamic_range"], candidate_dr))
+    if current_traits["channels"] and current_traits["channels"] >= 5.0:
+        if not candidate_channels or candidate_channels < current_traits["channels"]:
+            raise RuntimeError("Refusing audio channel downgrade")
+    if current_traits["atmos"] and not candidate_atmos:
+        raise RuntimeError("Refusing Atmos downgrade")
+
     payload = {
         "name": "ManualImport",
         "files": [{
@@ -495,6 +587,7 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
         rcfg, scfg = connection("radarr"), connection("sonarr")
         env["RADARR_URL"] = connection_url("radarr"); env["RADARR_KEY"] = rcfg["api_key"]
         env["SONARR_URL"] = connection_url("sonarr"); env["SONARR_KEY"] = scfg["api_key"]
+        env["SMART_OPTIMIZER_ADD_TAG"] = "1" if optimized_tag_enabled(app) else "0"
         if searches_per_run: env["RADARR_SEARCHES_PER_RUN" if app == "radarr" else "SONARR_SEARCHES_PER_RUN"] = str(searches_per_run)
         output = ""
         returncode = None
@@ -687,7 +780,7 @@ def page():
     runstat = manual_status("radarr")
     runlabel = "Idle" if not runstat["requested"] else ("%s%s · %d / %d searched" % (runstat["state"].capitalize(), (" · Searching " + runstat["current"]) if runstat.get("running") and runstat.get("current") else "", runstat["searched"], runstat["requested"]))
     actions = """<div class="controlbar primary"><form class="controlbox manualform" method="post" action="/manual-search"><input type="hidden" name="app" value="radarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="50"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-radarr" class="manualstate">%s</span></div>
-<form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="radarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", html.escape(runlabel), rule_min, rule_max, used, RADARR_BASE_BUDGET + extra_today, extra_today)
+<form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="radarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><label class="badge"><input type="checkbox" name="optimized_tag" value="1" %s> tag optimized</label><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", html.escape(runlabel), rule_min, rule_max, "checked" if optimized_tag_enabled("radarr") else "", used, RADARR_BASE_BUDGET + extra_today, extra_today)
     output = html.escape(snap.get("output") or "No UI-started run yet.")
     status = "Online" if api_online("radarr") else "Offline"
     warning = "" if ENABLE_ACTIONS else "<div class='notice'>Read-only mode is active. Smart retry controls will only be enabled after we validate queue detection and candidate selection.</div>"
@@ -852,7 +945,7 @@ def sonarr_page():
     elif not runstat.get("running") and runstat.get("last"):
         runlabel += "<span class='runitem'>Last searched: %s</span>" % html.escape(runstat["last"])
     son_actions = """<div class="controlbar primary"><form class="controlbox manualform" method="post" action="/manual-search"><input type="hidden" name="app" value="sonarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="50"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-sonarr" class="manualstate">%s</span></div>
-<form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="sonarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span><span class="badge">UHD 1080→2160 exception unchanged</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", runlabel, rule_min, rule_max, used, SONARR_BASE_BUDGET + extra_today, extra_today)
+<form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="sonarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><label class="badge"><input type="checkbox" name="optimized_tag" value="1" %s> tag optimized</label><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span><span class="badge">UHD 1080→2160 exception unchanged</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", runlabel, rule_min, rule_max, "checked" if optimized_tag_enabled("sonarr") else "", used, SONARR_BASE_BUDGET + extra_today, extra_today)
     err = ("<div class='notice bad'>Sonarr API error: %s</div>" % html.escape(error)) if error else ""
     connection_status = "Online" if api_online("sonarr") else "Offline"
     return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer UI · Sonarr</title><style>%s</style></head><body><div class="shell">
@@ -966,6 +1059,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(400); return
             try:
                 update_saving_window(app, float((form.get("min") or [""])[0]), float((form.get("max") or [""])[0]))
+                update_optimized_tag(app, (form.get("optimized_tag") or [""])[0].lower() in ("1", "true", "yes", "on"))
             except Exception as exc:
                 self.send_error(400, str(exc)); return
             self.send_response(303); self.send_header("Location", "/" + app); self.end_headers(); return
