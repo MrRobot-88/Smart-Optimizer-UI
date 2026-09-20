@@ -739,23 +739,14 @@ def sonarr_page():
 <div class="topbar compact"><div class="brand"><div class="brandcopy"><h1>Sonarr Optimizer</h1><div>Find smaller releases for your episodes while keeping quality.</div></div></div><div class="nav"><div class="appswitch"><a href="/radarr">Radarr</a><a class="active" href="/sonarr">Sonarr</a></div></div></div>
 %s%s
 <div class="grid five">
-<div class="stat"><div class="stathead"><span><span class="mini">↘</span>Storage saved</span></div><div class="value %s">%+.2f GiB</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">✓</span>Reductions</span></div><div class="value">%d</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">↓</span>Active downloads</span></div><div class="value">%d</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">⌕</span>Searches today</span></div><div class="value">%d</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">◷</span>Temporary extra today</span></div><div class="value">+%d</div></div>
+<div class="stat"><div class="stathead"><span><span class="mini">↘</span>Storage saved</span></div><div class="value %s">%+.2f GiB</div><div class="sub">Observed across loaded upgrade history</div></div>
+<div class="stat"><div class="stathead"><span><span class="mini">✓</span>Reductions</span></div><div class="value">%d</div><div class="sub">Observed upgrades that ended smaller</div></div>
+<div class="stat"><div class="stathead"><span><span class="mini">↓</span>Active downloads</span></div><div class="value">%d</div><div class="sub">Live Sonarr queue</div></div>
+<div class="stat"><div class="stathead"><span><span class="mini">⌕</span>Searches today</span></div><div class="value">%d</div><div class="sub">Optimizer state counter</div></div>
+<div class="stat"><div class="stathead"><span><span class="mini">◷</span>Temporary extra today</span></div><div class="value">+%d</div><div class="sub">Resets tomorrow</div></div>
 </div>
-<div class="dashboard2">
-<div class="panel"><div class="panelhead"><div><h3>Download radar</h3><p>Live Sonarr queue.</p></div><span class="badge">%d ACTIVE</span></div>%s</div>
+<div class="layout"><div>
 <div class="panel"><div class="panelhead"><div><h3>Recent changes</h3><p>Latest optimized episodes and their size changes.</p></div><a class="badge" href="/sonarr/history">HISTORY</a></div><table><thead><tr><th>Release</th><th>Before</th><th>After</th><th>Change</th></tr></thead><tbody>%s</tbody></table></div>
-</div>
-<div class="dashboard2">
-<div class="panel"><div class="panelhead"><div><h3>Optimizer intelligence</h3><p>Useful context without pretending Sonarr history equals optimizer success.</p></div><span class="badge">SUMMARY</span></div><div class="sidecontent">
-<div class="metricline"><span>Observed net reduction</span><b class="%s">%.1f%%</b></div>
-<div class="metricline"><span>Total smaller replacements</span><b>%d</b></div>
-<div class="metricline"><span>Active downloads</span><b>%d</b></div>
-<div class="metricline"><span>Last observed upgrade</span><b>%s</b></div>
-</div></div>
 <div class="panel"><div class="panelhead"><div><h3>Settings &amp; status</h3><p>Current configuration and system status.</p></div><span class="badge">CONFIG</span></div><div class="sidecontent">
 <div class="metricline"><span>Downsize range</span><b>%.1f – %.1f%%</b></div>
 <div class="metricline"><span>UHD (1080 → 2160) exception</span><b>Enabled (unchanged)</b></div>
@@ -764,6 +755,15 @@ def sonarr_page():
 <div class="metricline"><span>Status</span><b class="good">Ready</b></div>
 </div></div>
 </div>
+<div>
+<div class="panel"><div class="panelhead"><div><h3>Download radar</h3><p>Live Sonarr queue.</p></div><span class="badge">%d ACTIVE</span></div>%s</div>
+<div class="panel"><div class="panelhead"><div><h3>Optimizer intelligence</h3><p>Useful context without pretending Sonarr history equals optimizer success.</p></div><span class="badge">SUMMARY</span></div><div class="sidecontent">
+<div class="metricline"><span>Observed net reduction</span><b class="%s">%.1f%%</b></div>
+<div class="metricline"><span>Total smaller replacements</span><b>%d</b></div>
+<div class="metricline"><span>Active downloads</span><b>%d</b></div>
+<div class="metricline"><span>Last observed upgrade</span><b>%s</b></div>
+</div></div>
+</div></div>
 <div class="footer"><a href="/">Smart Optimizer</a> · Sonarr dashboard</div></div>
 <script>
 let queueOpen=false;function toggleQueue(){const b=document.getElementById('queueExpand');if(queueOpen){location.href='/sonarr/history';return;}queueOpen=true;document.querySelectorAll('.queueitem.extra').forEach(el=>el.style.display='block');if(b)b.textContent='History →';}
