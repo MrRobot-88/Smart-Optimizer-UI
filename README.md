@@ -36,7 +36,7 @@ services:
     network_mode: host
     restart: unless-stopped
     environment:
-      TZ: Europe/Stockholm
+      TZ: ${TZ:-UTC}
       SMART_UI_HOST: 0.0.0.0
       SMART_UI_PORT: 8788
       RADARR_DAILY_SEARCH_BUDGET: 400
@@ -45,6 +45,8 @@ services:
       - ./config:/config
       - ./data:/data
 ```
+
+Set `TZ` to your local IANA timezone if desired (for example `Europe/London`, `America/New_York`, or `Australia/Sydney`). If it is not set, the container uses `UTC`.
 
 Then open:
 
