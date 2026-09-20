@@ -2,7 +2,9 @@
 
 One container for **Sonarr Smart Optimizer + Radarr Smart Optimizer + the combined web UI**.
 
-The image bundles the optimizer scripts from:
+The Sonarr and Radarr optimizer engines are embedded directly in `smart-optimizer-ui.py`. The container does not require the standalone optimizer repositories or separate optimizer-script mounts.
+
+The standalone projects remain available for users who do not want the UI:
 
 - [Sonarr Smart Optimizer](https://github.com/MrRobot-88/Sonarr-Smart-Optimizer)
 - [Radarr Smart Optimizer](https://github.com/MrRobot-88/Radarr-Smart-Optimizer)
@@ -12,7 +14,7 @@ You do **not** need to edit either optimizer script or put Radarr/Sonarr API key
 ## Features
 
 - One dashboard for Radarr and Sonarr
-- Built-in Radarr and Sonarr optimizer scripts
+- Radarr and Sonarr optimizer engines built directly into the UI application
 - Web-based Radarr/Sonarr host, port and API-key setup
 - Test Connection before saving
 - Online/offline API status on each dashboard
