@@ -1,0 +1,11 @@
+.git
+.github
+__pycache__
+*.pyc
+*.pyo
+*.log
+config/
+data/
+smart-optimizer-connections.json
+smart-optimizer-control.json
+*-state.json
