@@ -75,7 +75,7 @@ def add_daily_extra(app, amount=50):
     return extras[today]
 
 job_lock = threading.Lock()
-jobs = {a: {"running": False, "requested": 0, "start": 0, "proc": None, "stopped": False, "started": None, "finished": None, "output": "", "current": "", "last": "", "returncode": None} for a in ("radarr", "sonarr")}
+jobs = {a: {"running": False, "requested": 0, "start": 0, "proc": None, "stopped": False, "started": None, "finished": None, "output": "", "current": "", "last": "", "display_searched": 0, "display_item": "", "returncode": None} for a in ("radarr", "sonarr")}
 
 
 def radarr_request(path, method="GET", payload=None):
@@ -383,9 +383,15 @@ def manual_status(app):
     else:
         state = "finished"
         detail = "No eligible items" if requested and searched == 0 else ""
-    return {"state": state, "searched": searched, "requested": requested,
-            "running": bool(snap.get("running")), "detail": detail,
-            "current": str(snap.get("current") or ""), "last": str(snap.get("last") or "")}
+    display_searched = int(snap.get("display_searched") or 0)
+    display_item = str(snap.get("display_item") or "")
+    if not snap.get("running") and searched > display_searched:
+        display_searched = searched
+        display_item = str(snap.get("last") or display_item)
+    return {"state": state, "searched": display_searched if snap.get("started") else searched,
+            "requested": requested, "running": bool(snap.get("running")), "detail": detail,
+            "current": display_item if snap.get("running") else "",
+            "last": display_item if not snap.get("running") else ""}
 
 def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
     with job_lock:
@@ -393,7 +399,7 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
         if jobs[app]["running"] or jobs[other]["running"]: return False
         start = search_count(app)
         if daily_extra: add_daily_extra(app, daily_extra)
-        jobs[app].update(running=True, requested=int(searches_per_run or 0), start=start, proc=None, stopped=False, started=time.time(), finished=None, output="", current="", last="", returncode=None)
+        jobs[app].update(running=True, requested=int(searches_per_run or 0), start=start, proc=None, stopped=False, started=time.time(), finished=None, output="", current="", last="", display_searched=0, display_item="", returncode=None)
     def worker():
         script = OPTIMIZER if app == "radarr" else SONARR_OPTIMIZER
         cmd = ["python3", "-u", script] + (["--live"] if live else [])
@@ -423,6 +429,11 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
                     with job_lock:
                         jobs[app]["current"] = current
                         jobs[app]["last"] = current
+                progress = re.search(r"SEARCH PROGRESS:\\s*([0-9]+)\\s*/\\s*([0-9]+)", clean)
+                if progress:
+                    with job_lock:
+                        jobs[app]["display_searched"] = int(progress.group(1))
+                        jobs[app]["display_item"] = str(jobs[app].get("current") or jobs[app].get("last") or "")
                 with job_lock:
                     jobs[app]["output"] = "".join(chunks)[-MAX_OUTPUT:]
             proc.wait()
