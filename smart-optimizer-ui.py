@@ -679,11 +679,11 @@ def page():
 %s%s
 <div class="toolbar"><div class="searchbox"><span class="searchicon">⌕</span><input id="librarySearch" autocomplete="off" placeholder="Search releases and current downloads…"></div></div>
 <div class="grid five">
-<div class="stat"><div class="stathead"><span><span class="mini">↘</span>Storage saved</span></div><div class="value %s">%+.2f GiB</div><div class="sub">Observed across loaded upgrade history</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">✓</span>Space reductions</span></div><div class="value">%d</div><div class="sub">Observed upgrades that ended smaller</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">↓</span>Active downloads</span></div><div class="value">%d</div><div class="sub">%d need attention · %d optimizer import blocked</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">⌕</span>Searches today</span></div><div class="value">%d</div><div class="sub">Optimizer state counter</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">◷</span>Temporary extra today</span></div><div class="value">+%d</div><div class="sub">Resets tomorrow</div></div>
+<div class="stat"><div class="stathead"><span>Storage saved</span></div><div class="value %s">%+.2f GiB</div><div class="sub">Observed across loaded upgrade history</div></div>
+<div class="stat"><div class="stathead"><span>Space reductions</span></div><div class="value">%d</div><div class="sub">Observed upgrades that ended smaller</div></div>
+<div class="stat"><div class="stathead"><span>Active downloads</span></div><div class="value">%d</div><div class="sub">%d need attention · %d optimizer import blocked</div></div>
+<div class="stat"><div class="stathead"><span>Searches today</span></div><div class="value">%d</div><div class="sub">Optimizer state counter</div></div>
+<div class="stat"><div class="stathead"><span>Temporary extra today</span></div><div class="value">+%d</div><div class="sub">Resets tomorrow</div></div>
 </div>
 <div class="layout"><div>
 <div class="panel"><div class="panelhead"><div><h3>Recent file changes</h3><p>Observed Radarr upgrade pairs. These are not all necessarily optimizer-triggered.</p></div><a class="badge" href="/radarr/history">HISTORY</a></div>
@@ -839,11 +839,11 @@ def sonarr_page():
 %s%s
 <div class="toolbar"><div class="searchbox"><span class="searchicon">⌕</span><input id="librarySearch" autocomplete="off" placeholder="Search releases and current downloads…"></div></div>
 <div class="grid five">
-<div class="stat"><div class="stathead"><span><span class="mini">↘</span>Storage saved</span></div><div class="value %s">%+.2f GiB</div><div class="sub">Observed across loaded upgrade history</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">✓</span>Reductions</span></div><div class="value">%d</div><div class="sub">Observed upgrades that ended smaller</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">↓</span>Active downloads</span></div><div class="value">%d</div><div class="sub">Live Sonarr queue</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">⌕</span>Searches today</span></div><div class="value">%d</div><div class="sub">Optimizer state counter</div></div>
-<div class="stat"><div class="stathead"><span><span class="mini">◷</span>Temporary extra today</span></div><div class="value">+%d</div><div class="sub">Resets tomorrow</div></div>
+<div class="stat"><div class="stathead"><span>Storage saved</span></div><div class="value %s">%+.2f GiB</div><div class="sub">Observed across loaded upgrade history</div></div>
+<div class="stat"><div class="stathead"><span>Reductions</span></div><div class="value">%d</div><div class="sub">Observed upgrades that ended smaller</div></div>
+<div class="stat"><div class="stathead"><span>Active downloads</span></div><div class="value">%d</div><div class="sub">Live Sonarr queue</div></div>
+<div class="stat"><div class="stathead"><span>Searches today</span></div><div class="value">%d</div><div class="sub">Optimizer state counter</div></div>
+<div class="stat"><div class="stathead"><span>Temporary extra today</span></div><div class="value">+%d</div><div class="sub">Resets tomorrow</div></div>
 </div>
 <div class="layout"><div>
 <div class="panel"><div class="panelhead"><div><h3>Recent changes</h3><p>Latest optimized episodes and their size changes.</p></div><a class="badge" href="/sonarr/history">HISTORY</a></div><table><thead><tr><th>Release</th><th>Before</th><th>After</th><th>Change</th></tr></thead><tbody>%s</tbody></table></div>
