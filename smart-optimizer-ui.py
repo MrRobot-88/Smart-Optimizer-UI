@@ -772,8 +772,9 @@ let changesOpen=false;function toggleChanges(){const b=document.getElementById('
 %s
 </body></html>""" % (
         CSS, son_actions, err, "good" if saved >= 0 else "bad", gib(saved), positive, len(queue), used, extra_today,
-        len(queue), qrows, rows, "good" if reduction_pct >= 0 else "bad", reduction_pct, positive, len(queue),
-        html.escape(last_date), rule_min, rule_max, SONARR_BASE_BUDGET, extra_today, AJAX_SCRIPT)
+        rows, rule_min, rule_max, SONARR_BASE_BUDGET, extra_today, len(queue), qrows,
+        "good" if reduction_pct >= 0 else "bad", reduction_pct, positive, len(queue),
+        html.escape(last_date), AJAX_SCRIPT)
 
 
 class Handler(BaseHTTPRequestHandler):
