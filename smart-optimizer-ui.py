@@ -429,11 +429,17 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
                     with job_lock:
                         jobs[app]["current"] = current
                         jobs[app]["last"] = current
-                progress = re.search(r"SEARCH PROGRESS:\s*([0-9]+)\s*/\s*([0-9]+)", clean)
-                if progress:
-                    with job_lock:
-                        jobs[app]["display_searched"] = int(progress.group(1))
-                        jobs[app]["display_item"] = str(jobs[app].get("current") or jobs[app].get("last") or "")
+                # Pair completed-search count with the episode that produced it.
+                # Parse without regex so this cannot fail because of escaping.
+                if "SEARCH PROGRESS:" in clean:
+                    try:
+                        done_text = clean.split("SEARCH PROGRESS:", 1)[1].strip().split("/", 1)[0].strip()
+                        done = int(done_text)
+                        with job_lock:
+                            jobs[app]["display_searched"] = done
+                            jobs[app]["display_item"] = str(jobs[app].get("current") or jobs[app].get("last") or "")
+                    except (ValueError, IndexError):
+                        pass
                 with job_lock:
                     jobs[app]["output"] = "".join(chunks)[-MAX_OUTPUT:]
             proc.wait()
