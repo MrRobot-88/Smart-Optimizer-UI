@@ -75,7 +75,7 @@ def add_daily_extra(app, amount=50):
     return extras[today]
 
 job_lock = threading.Lock()
-jobs = {a: {"running": False, "requested": 0, "start": 0, "proc": None, "stopped": False, "started": None, "finished": None, "output": "", "current": "", "returncode": None} for a in ("radarr", "sonarr")}
+jobs = {a: {"running": False, "requested": 0, "start": 0, "proc": None, "stopped": False, "started": None, "finished": None, "output": "", "current": "", "last": "", "returncode": None} for a in ("radarr", "sonarr")}
 
 
 def radarr_request(path, method="GET", payload=None):
@@ -385,7 +385,7 @@ def manual_status(app):
         detail = "No eligible items" if requested and searched == 0 else ""
     return {"state": state, "searched": searched, "requested": requested,
             "running": bool(snap.get("running")), "detail": detail,
-            "current": str(snap.get("current") or "")}
+            "current": str(snap.get("current") or ""), "last": str(snap.get("last") or "")}
 
 def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
     with job_lock:
@@ -393,7 +393,7 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
         if jobs[app]["running"] or jobs[other]["running"]: return False
         start = search_count(app)
         if daily_extra: add_daily_extra(app, daily_extra)
-        jobs[app].update(running=True, requested=int(searches_per_run or 0), start=start, proc=None, stopped=False, started=time.time(), finished=None, output="", current="", returncode=None)
+        jobs[app].update(running=True, requested=int(searches_per_run or 0), start=start, proc=None, stopped=False, started=time.time(), finished=None, output="", current="", last="", returncode=None)
     def worker():
         script = OPTIMIZER if app == "radarr" else SONARR_OPTIMIZER
         cmd = ["python3", "-u", script] + (["--live"] if live else [])
@@ -413,10 +413,13 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
                     chunks = chunks[-1000:]
                 clean = line.strip()
                 match = re.match(r"^\\s*\\d+\\.\\s+(.+?)\\s+S(\\d{2})E(\\d{2})\\s*$", clean)
+                if not match:
+                    match = re.match(r"^\\s*\\d+\\.\\s+(.+?)\\s+S(\\d{2})E(\\d{2})(?:\\s+.*)?$", clean)
                 if match:
-                    current = "%s S%sE%s" % (match.group(1), match.group(2), match.group(3))
+                    current = "%s · S%sE%s" % (match.group(1).strip(), match.group(2), match.group(3))
                     with job_lock:
                         jobs[app]["current"] = current
+                        jobs[app]["last"] = current
                 with job_lock:
                     jobs[app]["output"] = "".join(chunks)[-MAX_OUTPUT:]
             proc.wait()
@@ -478,7 +481,7 @@ pre{margin:0;white-space:pre-wrap;word-break:break-word;max-height:305px;overflo
 .dashboard2 .panel{margin-bottom:0;align-self:start}
 .topbar.compact{margin-bottom:16px}
 .controlbar.primary{margin-bottom:8px}
-.ajaxmsg{font-size:.72rem;color:var(--muted)}.queueitem.extra,.changeextra{display:none}.changes{width:100%;table-layout:fixed}.changes .releasecol{width:45%}.changes .sizecol{width:18%}.changes .changecol{width:19%}.changes th,.changes td{overflow:hidden;text-overflow:ellipsis}.changes th:not(:first-child),.changes td:not(:first-child){white-space:nowrap;text-align:right}.changes td:first-child{white-space:nowrap}
+.manualstate{display:inline-flex;flex-direction:column;gap:3px;vertical-align:middle}.runmain{font-weight:700}.runitem{font-size:.72rem;color:var(--muted);font-weight:500}.ajaxmsg{font-size:.72rem;color:var(--muted)}.queueitem.extra,.changeextra{display:none}.changes{width:100%;table-layout:fixed}.changes .releasecol{width:45%}.changes .sizecol{width:18%}.changes .changecol{width:19%}.changes th,.changes td{overflow:hidden;text-overflow:ellipsis}.changes th:not(:first-child),.changes td:not(:first-child){white-space:nowrap;text-align:right}.changes td:first-child{white-space:nowrap}
 @media(max-width:1100px){.grid.five{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:900px){.dashboard2{grid-template-columns:1fr}.grid.five{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}.hero{align-items:flex-start;flex-direction:column}.topbar{align-items:flex-start;flex-direction:column}.nav{width:100%;justify-content:space-between}}
@@ -492,7 +495,9 @@ AJAX_SCRIPT = """<script>
  const state=document.getElementById('runstate-'+app);
  async function refresh(){
   try{const r=await fetch('/status?app='+app,{cache:'no-store'});const x=await r.json();
-   state.textContent=x.requested?(x.state.charAt(0).toUpperCase()+x.state.slice(1)+(x.running&&x.current?' · Searching '+x.current:'')+' · '+x.searched+' / '+x.requested+' searched'+(x.detail?' · '+x.detail:'')):'Idle';
+   const main=x.requested?(x.state.charAt(0).toUpperCase()+'. '+x.searched+' / '+x.requested+' searched'+(x.detail?' · '+x.detail:'')):'Idle';
+   const item=x.running&&x.current?('Now checking: '+x.current):(!x.running&&x.last?('Last checked: '+x.last):'');
+   state.innerHTML='<span class="runmain">'+main+'</span>'+(item?'<span class="runitem">'+item.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</span>':'');
    form.querySelector('button:not(.stopbtn)').disabled=!!x.running;
    form.querySelector('.stopbtn').disabled=!x.running;
   }catch(e){}
@@ -693,8 +698,12 @@ def sonarr_page():
         qrows += "<button type='button' class='expandbar' id='queueExpand' onclick='toggleQueue()'>Show %d more downloads ↓</button>" % (min(len(queue), 15) - 4)
     runstat = manual_status("sonarr")
     runlabel = "Idle" if not runstat["requested"] else ("%s · %d / %d searched" % (runstat["state"].capitalize(), runstat["searched"], runstat["requested"]))
+    if runstat.get("running") and runstat.get("current"):
+        runlabel += "<span class='runitem'>Now checking: %s</span>" % html.escape(runstat["current"])
+    elif not runstat.get("running") and runstat.get("last"):
+        runlabel += "<span class='runitem'>Last checked: %s</span>" % html.escape(runstat["last"])
     son_actions = """<div class="controlbar primary"><form class="controlbox manualform" method="post" action="/manual-search"><input type="hidden" name="app" value="sonarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="50"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-sonarr" class="manualstate">%s</span></div>
-<form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="sonarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span><span class="badge">UHD 1080→2160 exception unchanged</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", html.escape(runlabel), rule_min, rule_max, used, SONARR_BASE_BUDGET + extra_today, extra_today)
+<form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="sonarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span><span class="badge">UHD 1080→2160 exception unchanged</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", runlabel, rule_min, rule_max, used, SONARR_BASE_BUDGET + extra_today, extra_today)
     err = ("<div class='notice bad'>Sonarr API error: %s</div>" % html.escape(error)) if error else ""
     return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer UI · Sonarr</title><style>%s</style></head><body><div class="shell">
 <div class="topbar compact"><div class="brand"><div class="brandcopy"><h1>Sonarr Optimizer</h1><div>Find smaller releases for your episodes while keeping quality.</div></div></div><div class="nav"><div class="appswitch"><a href="/radarr">Radarr</a><a class="active" href="/sonarr">Sonarr</a></div></div></div>
