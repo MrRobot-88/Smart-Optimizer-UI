@@ -481,7 +481,7 @@ pre{margin:0;white-space:pre-wrap;word-break:break-word;max-height:305px;overflo
 .dashboard2 .panel{margin-bottom:0;align-self:start}
 .topbar.compact{margin-bottom:16px}
 .controlbar.primary{margin-bottom:8px}
-.manualstate{display:inline-flex;flex-direction:column;gap:3px;vertical-align:middle}.runmain{font-weight:700}.runitem{font-size:.72rem;color:var(--muted);font-weight:500}.ajaxmsg{font-size:.72rem;color:var(--muted)}.queueitem.extra,.changeextra{display:none}.changes{width:100%;table-layout:fixed}.changes .releasecol{width:45%}.changes .sizecol{width:18%}.changes .changecol{width:19%}.changes th,.changes td{overflow:hidden;text-overflow:ellipsis}.changes th:not(:first-child),.changes td:not(:first-child){white-space:nowrap;text-align:right}.changes td:first-child{white-space:nowrap}
+.manualstate{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:4px;min-width:260px;line-height:1.25}.runmain{display:block;font-weight:700;white-space:nowrap}.runitem{display:block;font-size:.72rem;color:var(--muted);font-weight:500;white-space:nowrap}.ajaxmsg{font-size:.72rem;color:var(--muted)}.queueitem.extra,.changeextra{display:none}.changes{width:100%;table-layout:fixed}.changes .releasecol{width:45%}.changes .sizecol{width:18%}.changes .changecol{width:19%}.changes th,.changes td{overflow:hidden;text-overflow:ellipsis}.changes th:not(:first-child),.changes td:not(:first-child){white-space:nowrap;text-align:right}.changes td:first-child{white-space:nowrap}
 @media(max-width:1100px){.grid.five{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:900px){.dashboard2{grid-template-columns:1fr}.grid.five{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}.hero{align-items:flex-start;flex-direction:column}.topbar{align-items:flex-start;flex-direction:column}.nav{width:100%;justify-content:space-between}}
@@ -495,9 +495,11 @@ AJAX_SCRIPT = """<script>
  const state=document.getElementById('runstate-'+app);
  async function refresh(){
   try{const r=await fetch('/status?app='+app,{cache:'no-store'});const x=await r.json();
-   const main=x.requested?(x.state.charAt(0).toUpperCase()+'. '+x.searched+' / '+x.requested+' searched'+(x.detail?' · '+x.detail:'')):'Idle';
+   const word=x.state.charAt(0).toUpperCase()+x.state.slice(1);
+   const main=x.requested?(word+' · '+x.searched+' / '+x.requested+' searched'+(x.detail?' · '+x.detail:'')):'Idle';
    const item=x.running&&x.current?('Now checking: '+x.current):(!x.running&&x.last?('Last checked: '+x.last):'');
-   state.innerHTML='<span class="runmain">'+main+'</span>'+(item?'<span class="runitem">'+item.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</span>':'');
+   const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+   state.innerHTML='<span class="runmain">'+esc(main)+'</span>'+(item?'<span class="runitem">'+esc(item)+'</span>':'');
    form.querySelector('button:not(.stopbtn)').disabled=!!x.running;
    form.querySelector('.stopbtn').disabled=!x.running;
   }catch(e){}
