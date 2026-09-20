@@ -157,7 +157,24 @@ def update_saving_window(app, minimum, maximum):
     if not (0 <= minimum <= maximum <= 100):
         raise ValueError("Use 0-100%, and minimum cannot be greater than maximum.")
     data = load_controls(); c = data.setdefault(app, {})
-    c["min_saving_percent"] = minimum; c["max_saving_percent"] = maximum
+    c["min_saving_percent"] = float(minimum)
+    c["max_saving_percent"] = float(maximum)
+    save_controls(data)
+
+def update_optimizer_controls(app, minimum, maximum, optimized_tag):
+    """Persist the complete UI optimizer policy in one write.
+
+    Keeping min/max and related controls together prevents a later control
+    update from accidentally leaving the UI display and optimizer policy out
+    of sync.
+    """
+    if not (0 <= minimum <= maximum <= 100):
+        raise ValueError("Use 0-100%, and minimum cannot be greater than maximum.")
+    data = load_controls()
+    c = data.setdefault(app, {})
+    c["min_saving_percent"] = float(minimum)
+    c["max_saving_percent"] = float(maximum)
+    c["optimized_tag"] = bool(optimized_tag)
     save_controls(data)
 
 def add_daily_extra(app, amount=50):
@@ -587,6 +604,16 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
         env["RADARR_URL"] = connection_url("radarr"); env["RADARR_KEY"] = rcfg["api_key"]
         env["SONARR_URL"] = connection_url("sonarr"); env["SONARR_KEY"] = scfg["api_key"]
         env["SMART_OPTIMIZER_ADD_TAG"] = "1" if optimized_tag_enabled(app) else "0"
+        # Pass the UI-selected window explicitly as well as through the shared
+        # control file. The engines still read the control file, but this
+        # guarantees their fallback values match what the UI currently shows.
+        rule_min, rule_max, _ = app_controls(app)
+        if app == "radarr":
+            env["RADARR_MIN_SAVING_PERCENT"] = str(rule_min)
+            env["RADARR_MAX_SAVING_PERCENT"] = str(rule_max)
+        else:
+            env["SONARR_MIN_SAVING_PERCENT"] = str(rule_min)
+            env["SONARR_MAX_SAVING_PERCENT"] = str(rule_max)
         if searches_per_run: env["RADARR_SEARCHES_PER_RUN" if app == "radarr" else "SONARR_SEARCHES_PER_RUN"] = str(searches_per_run)
         output = ""
         returncode = None
@@ -1057,8 +1084,12 @@ class Handler(BaseHTTPRequestHandler):
             if app not in ("radarr", "sonarr"):
                 self.send_error(400); return
             try:
-                update_saving_window(app, float((form.get("min") or [""])[0]), float((form.get("max") or [""])[0]))
-                update_optimized_tag(app, (form.get("optimized_tag") or [""])[0].lower() in ("1", "true", "yes", "on"))
+                update_optimizer_controls(
+                    app,
+                    float((form.get("min") or [""])[0]),
+                    float((form.get("max") or [""])[0]),
+                    (form.get("optimized_tag") or [""])[0].lower() in ("1", "true", "yes", "on"),
+                )
             except Exception as exc:
                 self.send_error(400, str(exc)); return
             self.send_response(303); self.send_header("Location", "/" + app); self.end_headers(); return
