@@ -412,11 +412,14 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
                 if len(chunks) > 2000:
                     chunks = chunks[-1000:]
                 clean = line.strip()
-                match = re.match(r"^\\s*\\d+\\.\\s+(.+?)\\s+S(\\d{2})E(\\d{2})\\s*$", clean)
-                if not match:
-                    match = re.match(r"^\\s*\\d+\\.\\s+(.+?)\\s+S(\\d{2})E(\\d{2})(?:\\s+.*)?$", clean)
-                if match:
-                    current = "%s · S%sE%s" % (match.group(1).strip(), match.group(2), match.group(3))
+                # Sonarr item lines look like: 20. 'Allo 'Allo! S04E01
+                # Avoid whitespace-regex escaping issues: locate the SxxExx token,
+                # then derive the series title from the text before it.
+                match = re.search(r"S([0-9]{2})E([0-9]{2})", clean)
+                if match and ". " in clean[:match.start()]:
+                    before = clean[:match.start()].strip()
+                    title = before.split(". ", 1)[1].strip()
+                    current = "%s · S%sE%s" % (title, match.group(1), match.group(2))
                     with job_lock:
                         jobs[app]["current"] = current
                         jobs[app]["last"] = current
