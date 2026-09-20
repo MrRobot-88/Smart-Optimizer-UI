@@ -34,6 +34,66 @@ SONARR_OPTIMIZER = os.environ.get("SONARR_OPTIMIZER_SCRIPT", os.path.join(BASE_D
 RADARR_BASE_BUDGET = int(os.environ.get("RADARR_DAILY_SEARCH_BUDGET", "400"))
 SONARR_BASE_BUDGET = int(os.environ.get("SONARR_DAILY_SEARCH_BUDGET", "400"))
 MAX_MANUAL = max(1, int(os.environ.get("SMART_UI_MAX_MANUAL_SEARCHES", "10000")))
+CONNECTION_FILE = os.environ.get("SMART_OPTIMIZER_CONNECTIONS", os.path.join(BASE_DIR, "smart-optimizer-connections.json"))
+
+def load_connections():
+    try:
+        with open(CONNECTION_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def save_connections(data):
+    os.makedirs(os.path.dirname(CONNECTION_FILE), exist_ok=True)
+    with open(CONNECTION_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+        f.flush(); os.fsync(f.fileno())
+
+def connection(app):
+    data = load_connections().get(app, {})
+    if app == "radarr":
+        fallback_url, fallback_key, default_port = RADARR_URL, API_KEY, 7878
+    else:
+        fallback_url, fallback_key, default_port = SONARR_URL, SONARR_KEY, 8989
+    parsed = urllib.parse.urlparse(fallback_url if "://" in fallback_url else "http://" + fallback_url)
+    scheme = str(data.get("scheme") or parsed.scheme or "http").lower()
+    host = str(data.get("host") or parsed.hostname or "127.0.0.1").strip()
+    port = int(data.get("port") or parsed.port or default_port)
+    key = str(data.get("api_key") or fallback_key or "").strip()
+    return {"scheme": scheme if scheme in ("http", "https") else "http", "host": host, "port": port, "api_key": key}
+
+def connection_url(app):
+    cfg = connection(app)
+    return "%s://%s:%d" % (cfg["scheme"], cfg["host"], cfg["port"])
+
+def update_connection(app, scheme, host, port, api_key):
+    if app not in ("radarr", "sonarr"): raise ValueError("Unknown app")
+    scheme = scheme.lower().strip()
+    host = host.strip().rstrip("/")
+    if scheme not in ("http", "https"): raise ValueError("Scheme must be http or https")
+    if not host or "/" in host: raise ValueError("Enter only the hostname or IP address")
+    port = int(port)
+    if not 1 <= port <= 65535: raise ValueError("Port must be 1-65535")
+    current = connection(app)
+    key = api_key.strip() or current["api_key"]
+    if not key: raise ValueError("API key is required")
+    data = load_connections()
+    data[app] = {"scheme": scheme, "host": host, "port": port, "api_key": key}
+    save_connections(data)
+
+def test_connection(app, scheme=None, host=None, port=None, api_key=None):
+    cfg = connection(app)
+    scheme = (scheme or cfg["scheme"]).strip().lower()
+    host = (host or cfg["host"]).strip().rstrip("/")
+    port = int(port or cfg["port"])
+    key = (api_key or "").strip() or cfg["api_key"]
+    if not key: raise RuntimeError("API key is missing")
+    url = "%s://%s:%d/api/v3/system/status" % (scheme, host, port)
+    req = urllib.request.Request(url, headers={"X-Api-Key": key, "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=8) as response:
+        data = json.loads(response.read().decode("utf-8") or "{}")
+    return str(data.get("version") or "connected")
 
 def load_controls():
     try:
@@ -79,14 +139,15 @@ jobs = {a: {"running": False, "requested": 0, "start": 0, "proc": None, "stopped
 
 
 def radarr_request(path, method="GET", payload=None):
-    if not API_KEY:
-        raise RuntimeError("RADARR_KEY is not configured")
+    cfg = connection("radarr")
+    if not cfg["api_key"]:
+        raise RuntimeError("Radarr API key is not configured")
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
-        RADARR_URL + "/api/v3" + path,
+        connection_url("radarr") + "/api/v3" + path,
         data=data,
         method=method,
-        headers={"X-Api-Key": API_KEY, "Accept": "application/json",
+        headers={"X-Api-Key": cfg["api_key"], "Accept": "application/json",
                  "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=30) as response:
@@ -94,17 +155,16 @@ def radarr_request(path, method="GET", payload=None):
         return json.loads(raw) if raw else {}
 
 def radarr_get(path):
-    if not API_KEY:
-        raise RuntimeError("RADARR_KEY is not configured")
     return radarr_request(path)
 
 
 def sonarr_get(path):
-    if not SONARR_KEY:
-        raise RuntimeError("SONARR_KEY is not configured")
+    cfg = connection("sonarr")
+    if not cfg["api_key"]:
+        raise RuntimeError("Sonarr API key is not configured")
     req = urllib.request.Request(
-        SONARR_URL + "/api/v3" + path,
-        headers={"X-Api-Key": SONARR_KEY, "Accept": "application/json"},
+        connection_url("sonarr") + "/api/v3" + path,
+        headers={"X-Api-Key": cfg["api_key"], "Accept": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=30) as response:
         raw = response.read().decode("utf-8")
@@ -404,6 +464,9 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
         script = OPTIMIZER if app == "radarr" else SONARR_OPTIMIZER
         cmd = ["python3", "-u", script] + (["--live"] if live else [])
         env = os.environ.copy(); env["SMART_OPTIMIZER_CONTROL"] = CONTROL_FILE
+        rcfg, scfg = connection("radarr"), connection("sonarr")
+        env["RADARR_URL"] = connection_url("radarr"); env["RADARR_KEY"] = rcfg["api_key"]
+        env["SONARR_URL"] = connection_url("sonarr"); env["SONARR_KEY"] = scfg["api_key"]
         if searches_per_run: env["RADARR_SEARCHES_PER_RUN" if app == "radarr" else "SONARR_SEARCHES_PER_RUN"] = str(searches_per_run)
         output = ""
         returncode = None
@@ -652,7 +715,34 @@ box.addEventListener('input',()=>{const q=box.value.trim().toLowerCase();documen
 
 
 def home_page():
-    return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer</title><style>%s</style></head><body><div class="shell homewrap"><div class="homecard"><div class="brand" style="justify-content:center;margin-bottom:24px"><div class="mark">S</div></div><h1>Smart Optimizer</h1><p>Choose the library you want to inspect.</p><div class="chooser"><a class="choice" href="/radarr"><b>Radarr →</b><span>Movies · storage savings · download radar</span></a><a class="choice" href="/sonarr"><b>Sonarr →</b><span>Episodes · storage savings · download radar</span></a></div></div></div></body></html>""" % CSS
+    return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer</title><style>%s</style></head><body><div class="shell homewrap"><div class="homecard"><div class="brand" style="justify-content:center;margin-bottom:24px"><div class="mark">S</div></div><h1>Smart Optimizer</h1><p>Choose the library you want to inspect.</p><div class="chooser"><a class="choice" href="/radarr"><b>Radarr →</b><span>Movies · storage savings · download radar</span></a><a class="choice" href="/sonarr"><b>Sonarr →</b><span>Episodes · storage savings · download radar</span></a></div><div style="margin-top:20px"><a class="badge" href="/settings">⚙ Settings</a></div></div></div></body></html>""" % CSS
+
+
+def settings_page(message="", bad=False):
+    rcfg, scfg = connection("radarr"), connection("sonarr")
+    notice = ""
+    if message:
+        notice = "<div class='notice%s'>%s</div>" % (" bad" if bad else "", html.escape(message))
+    def card(app, cfg, default_port):
+        name = app.capitalize()
+        masked = "Configured · leave blank to keep current key" if cfg["api_key"] else "Not configured"
+        return """<div class="panel"><div class="panelhead"><div><h3>%s connection</h3><p>Configure the %s API used by the dashboard and optimizer.</p></div><span class="badge">%s</span></div>
+<form method="post" action="/connection-settings" class="sidecontent">
+<input type="hidden" name="app" value="%s">
+<div class="metricline"><span>Protocol</span><select name="scheme"><option value="http"%s>http</option><option value="https"%s>https</option></select></div>
+<div class="metricline"><span>IP / hostname</span><input name="host" value="%s" placeholder="127.0.0.1" required></div>
+<div class="metricline"><span>Port</span><input name="port" type="number" min="1" max="65535" value="%d" placeholder="%d" required></div>
+<div class="metricline"><span>API key</span><input name="api_key" type="password" value="" placeholder="%s" autocomplete="new-password"></div>
+<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px"><button name="action" value="test" type="submit">Test connection</button><button name="action" value="save" type="submit">Save</button></div>
+</form></div>""" % (name, name, "CONFIGURED" if cfg["api_key"] else "SETUP", app,
+            " selected" if cfg["scheme"] == "http" else "", " selected" if cfg["scheme"] == "https" else "",
+            html.escape(cfg["host"], quote=True), cfg["port"], default_port, masked)
+    return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer · Settings</title><style>%s</style></head><body><div class="shell">
+<div class="topbar compact"><div class="brand"><div class="brandcopy"><h1>Connection settings</h1><div>Radarr and Sonarr API connections.</div></div></div><div class="nav"><a class="badge" href="/">← Smart Optimizer</a></div></div>
+%s
+<div class="dashboard2">%s%s</div>
+<div class="notice">Saved settings override Docker environment values. Leaving the API-key field blank keeps the currently configured key. Optimizer queues, cursors, history and downsize rules are not changed here.</div>
+</div></body></html>""" % (CSS, notice, card("radarr", rcfg, 7878), card("sonarr", scfg, 8989))
 
 
 def history_page(app):
@@ -793,6 +883,8 @@ class Handler(BaseHTTPRequestHandler):
             rendered = page()
         elif path == "/sonarr":
             rendered = sonarr_page()
+        elif path == "/settings":
+            rendered = settings_page()
         elif path == "/radarr/history":
             rendered = history_page("radarr")
         elif path == "/sonarr/history":
@@ -810,6 +902,29 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = min(int(self.headers.get("Content-Length", "0")), 4096)
         form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
+        if self.path == "/connection-settings":
+            if not ENABLE_ACTIONS:
+                self.send_error(403); return
+            app = (form.get("app") or [""])[0]
+            action = (form.get("action") or [""])[0]
+            if app not in ("radarr", "sonarr") or action not in ("test", "save"):
+                self.send_error(400); return
+            try:
+                scheme = (form.get("scheme") or ["http"])[0]
+                host = (form.get("host") or [""])[0]
+                port = int((form.get("port") or ["0"])[0])
+                key = (form.get("api_key") or [""])[0]
+                if action == "test":
+                    version = test_connection(app, scheme, host, port, key)
+                    rendered = settings_page("%s connection successful · version %s" % (app.capitalize(), version))
+                else:
+                    test_connection(app, scheme, host, port, key)
+                    update_connection(app, scheme, host, port, key)
+                    rendered = settings_page("%s settings saved and connection verified." % app.capitalize())
+            except Exception as exc:
+                rendered = settings_page("%s: %s" % (app.capitalize(), str(exc)), True)
+            body = rendered.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body); return
         if self.path == "/settings":
             if not ENABLE_ACTIONS:
                 self.send_error(403); return
