@@ -1,4 +1,5 @@
 name: Publish Docker image
+# publish-trigger: 2026-09-20
 
 on:
   push:
