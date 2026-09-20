@@ -518,7 +518,7 @@ AJAX_SCRIPT = """<script>
    const word=x.state.charAt(0).toUpperCase()+x.state.slice(1);
    const main=x.requested?(word+' · '+x.searched+' / '+x.requested+' searched'+(x.detail?' · '+x.detail:'')):'Idle';
    const now=x.running&&x.current?('Now checking: '+x.current):'';
-   const last=x.last?('Last checked: '+x.last):'';
+   const last=!x.running&&x.last?('Last checked: '+x.last):'';
    const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
    state.innerHTML='<span class="runmain">'+esc(main)+'</span>'
      +(now?'<span class="runitem">'+esc(now)+'</span>':'')
