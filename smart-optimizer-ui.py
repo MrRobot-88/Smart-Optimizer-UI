@@ -35,6 +35,15 @@ RADARR_BASE_BUDGET = int(os.environ.get("RADARR_DAILY_SEARCH_BUDGET", "400"))
 SONARR_BASE_BUDGET = int(os.environ.get("SONARR_DAILY_SEARCH_BUDGET", "400"))
 MAX_MANUAL = max(1, int(os.environ.get("SMART_UI_MAX_MANUAL_SEARCHES", "10000")))
 CONNECTION_FILE = os.environ.get("SMART_OPTIMIZER_CONNECTIONS", os.path.join(BASE_DIR, "smart-optimizer-connections.json"))
+LIBRARY_CACHE_DIR = os.environ.get("SMART_OPTIMIZER_CACHE_DIR", os.path.dirname(CONTROL_FILE) or BASE_DIR)
+LIBRARY_CACHE_REFRESH_SECONDS = max(30, int(os.environ.get("SMART_OPTIMIZER_CACHE_REFRESH_SECONDS", "60")))
+LIBRARY_CACHE_FILES = {
+    "radarr": os.path.join(LIBRARY_CACHE_DIR, "radarr-library-cache.json"),
+    "sonarr": os.path.join(LIBRARY_CACHE_DIR, "sonarr-library-cache.json"),
+}
+library_cache_lock = threading.Lock()
+library_cache_refreshing = {"radarr": False, "sonarr": False}
+
 
 def load_connections():
     try:
@@ -221,34 +230,102 @@ def remove_optimizer_exclusion(app, item_id):
     save_controls(data)
 
 
+def _library_cache_path(app):
+    if app not in ("radarr", "sonarr"):
+        raise ValueError("Unknown app")
+    return LIBRARY_CACHE_FILES[app]
+
+
+def _write_library_cache(app, items):
+    """Persist only the tiny fields needed by exclusion search."""
+    path = _library_cache_path(app)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    payload = {
+        "app": app,
+        "updated": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "items": items,
+    }
+    tmp = path + ".tmp"
+    with library_cache_lock:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+
+
+def _read_library_cache(app):
+    path = _library_cache_path(app)
+    try:
+        with library_cache_lock:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        raw = payload.get("items", []) if isinstance(payload, dict) else payload
+        return raw if isinstance(raw, list) else []
+    except Exception:
+        return []
+
+
+def refresh_library_cache(app):
+    """Fetch Radarr/Sonarr in the background; never blocks exclusion typing."""
+    if app not in ("radarr", "sonarr"):
+        return
+    if library_cache_refreshing.get(app):
+        return
+    library_cache_refreshing[app] = True
+    try:
+        raw = radarr_get("/movie") if app == "radarr" else sonarr_get("/series")
+        items = []
+        for x in raw if isinstance(raw, list) else []:
+            try:
+                item_id = int(x.get("id"))
+            except (TypeError, ValueError):
+                continue
+            items.append({
+                "id": item_id,
+                "title": str(x.get("title") or ""),
+                "year": x.get("year"),
+            })
+        items.sort(key=lambda x: (x["title"].casefold(), int(x.get("year") or 0)))
+        _write_library_cache(app, items)
+        print("[ui] %s library cache refreshed: %d items" % (app, len(items)), flush=True)
+    except Exception as exc:
+        # Keep the last known-good cache. A temporary API failure must not
+        # destroy instant search or existing exclusions.
+        print("[ui] %s library cache refresh failed: %s" % (app, exc), flush=True)
+    finally:
+        library_cache_refreshing[app] = False
+
+
+def request_library_cache_refresh(app):
+    threading.Thread(target=refresh_library_cache, args=(app,), daemon=True).start()
+
+
+def library_cache_worker():
+    # Build both caches after UI startup, then keep additions/removals synced.
+    while True:
+        for app in ("radarr", "sonarr"):
+            refresh_library_cache(app)
+        time.sleep(LIBRARY_CACHE_REFRESH_SECONDS)
+
+
 def library_items(app):
-    """Read library only. No write/delete API calls."""
-    if app == "radarr":
-        raw = radarr_get("/movie")
-    else:
-        raw = sonarr_get("/series")
-
-    out = []
+    """Return cached library instantly and overlay live optimizer exclusions."""
+    raw = _read_library_cache(app)
     excluded = {x["id"] for x in optimizer_exclusions(app)}
-
-    for x in raw if isinstance(raw, list) else []:
+    out = []
+    for x in raw:
         try:
             item_id = int(x.get("id"))
         except (TypeError, ValueError):
             continue
-
         out.append({
             "id": item_id,
             "title": str(x.get("title") or ""),
             "year": x.get("year"),
             "excluded": item_id in excluded,
         })
-
-    return sorted(
-        out,
-        key=lambda x: (x["title"].lower(), int(x.get("year") or 0))
-    )
-
+    return out
 
 def exclusion_panel(app):
     count = len(optimizer_exclusions(app))
@@ -2270,4 +2347,4 @@ if __name__ == "__main__":
     print("Actions:", "ENABLED" if ENABLE_ACTIONS else "disabled (read-only)")
     if HOST not in ("127.0.0.1", "localhost", "::1"):
         print("WARNING: UI has no built-in authentication; expose only on a trusted LAN/reverse proxy.")
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    threading.Thread(target=library_cache_worker, daemon=True).start()\n    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
