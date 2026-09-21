@@ -1,0 +1,24 @@
+#!/bin/sh
+case "$1" in
+  start|stop)
+    # Container lifecycle is handled by DSM's docker-project resource worker.
+    exit 0
+    ;;
+  status)
+    # Avoid direct Docker socket access: DSM 7 packages run unprivileged.
+    if command -v wget >/dev/null 2>&1; then
+      wget -q -T 3 -O /dev/null http://127.0.0.1:8788/ && exit 0
+    elif command -v curl >/dev/null 2>&1; then
+      curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:8788/ && exit 0
+    fi
+    exit 1
+    ;;
+  log)
+    echo "Smart Optimizer UI: http://127.0.0.1:8788/"
+    exit 0
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|status|log}" >&2
+    exit 1
+    ;;
+esac
