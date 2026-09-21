@@ -1,3 +1,3 @@
 #!/bin/sh
-mkdir -p "$SYNOPKG_PKGVAR/config" "$SYNOPKG_PKGVAR/data"
+mkdir -p "$SYNOPKG_PKGDEST/smart-optimizer-ui/config" "$SYNOPKG_PKGDEST/smart-optimizer-ui/data"
 exit 0
