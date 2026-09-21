@@ -60,7 +60,11 @@ Docker or Portainer automatically selects the matching architecture.
 
 ### Native packages
 
-Native platform packages such as Synology `.spk`, Debian/Ubuntu `.deb`, RPM `.rpm`, QNAP `.qpkg` and other vendor-specific packages are **not currently published**. They may be added in the future after they have dedicated packaging, installation/update handling and testing. For now, Docker is the supported cross-platform installation method.
+The Docker image remains the primary cross-platform distribution. A Synology DSM 7.2.1+ `.spk` wrapper is also built for NAS models that support **Container Manager**. The SPK does not replace the container: it asks DSM's official Container Manager resource worker to deploy the same multi-architecture GHCR image, keeps configuration/state in the package's persistent `var` directory, and exposes the UI on port `8788`.
+
+The SPK is architecture-independent itself (`noarch`); the underlying container is still selected automatically from the published `linux/amd64`, `linux/arm64` and `linux/arm/v7` images. Synology models that cannot install/run Container Manager should continue to use another supported Docker host rather than this SPK.
+
+The SPK build is available from the repository's **Build Synology SPK** GitHub Actions artifact after a successful workflow run. Native Debian/Ubuntu `.deb`, RPM `.rpm`, QNAP `.qpkg` and other vendor-specific packages are not currently published.
 
 ## Recommended install: Portainer Stack
 

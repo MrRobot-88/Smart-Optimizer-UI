@@ -1,0 +1,54 @@
+name: Build Synology SPK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packaging/synology/**"
+      - ".github/workflows/synology-spk.yml"
+  workflow_dispatch:
+  tags:
+    - "v*"
+
+jobs:
+  build-spk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Choose package version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=1.0.1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build SPK
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          chmod +x packaging/synology/build-spk.sh
+          packaging/synology/build-spk.sh dist
+
+      - name: Validate SPK structure
+        run: |
+          SPK="$(find dist -name '*.spk' -print -quit)"
+          test -n "$SPK"
+          tar -tf "$SPK" | grep -qx 'INFO'
+          tar -tf "$SPK" | grep -qx 'package.tgz'
+          tar -tf "$SPK" | grep -qx 'conf/privilege'
+          tar -tf "$SPK" | grep -qx 'conf/resource'
+          tar -tf "$SPK" | grep -qx 'scripts/start-stop-status'
+          tar -tf "$SPK" | grep -qx 'PACKAGE_ICON.PNG'
+          tar -tf "$SPK" | grep -qx 'PACKAGE_ICON_256.PNG'
+
+      - name: Upload SPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartOptimizerUI-Synology-SPK
+          path: dist/*.spk
+          if-no-files-found: error
