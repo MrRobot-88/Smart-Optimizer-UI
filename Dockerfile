@@ -1,7 +1,12 @@
 FROM python:3.12-alpine
 WORKDIR /app
 COPY smart-optimizer-ui.py /app/smart-optimizer-ui.py
-RUN python3 -m py_compile /app/smart-optimizer-ui.py
+COPY radarr-smart-optimizer.py /app/radarr-smart-optimizer.py
+COPY sonarr-smart-optimizer.py /app/sonarr-smart-optimizer.py
+RUN python3 -m py_compile \
+    /app/smart-optimizer-ui.py \
+    /app/radarr-smart-optimizer.py \
+    /app/sonarr-smart-optimizer.py
 RUN mkdir -p /config /data
 ENV SMART_UI_HOST=0.0.0.0 \
     SMART_UI_PORT=8788 \
