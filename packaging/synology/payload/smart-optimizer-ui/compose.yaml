@@ -1,0 +1,13 @@
+services:
+  smart-optimizer-ui:
+    image: ghcr.io/mrrobot-88/smart-optimizer-ui:latest
+    container_name: smart-optimizer-ui
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      TZ: Etc/UTC
+      SMART_UI_HOST: 0.0.0.0
+      SMART_UI_PORT: "8788"
+    volumes:
+      - /var/packages/smartoptimizerui/var/config:/config
+      - /var/packages/smartoptimizerui/var/data:/data
