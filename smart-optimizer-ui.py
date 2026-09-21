@@ -119,6 +119,21 @@ def save_controls(data):
         f.flush()
         os.fsync(f.fileno())
 
+def daily_search_budget(app):
+    data = load_controls()
+    c = data.get(app, {})
+    default = RADARR_BASE_BUDGET if app == "radarr" else SONARR_BASE_BUDGET
+    return int(c.get("daily_search_budget", default))
+
+def update_daily_search_budget(app, budget):
+    budget = int(budget)
+    if not 1 <= budget <= 100000:
+        raise ValueError("Daily search budget must be between 1 and 100000.")
+    data = load_controls()
+    c = data.setdefault(app, {})
+    c["daily_search_budget"] = budget
+    save_controls(data)
+
 def app_controls(app):
     data = load_controls()
     c = data.get(app, {})
@@ -660,6 +675,8 @@ def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
         rcfg, scfg = connection("radarr"), connection("sonarr")
         env["RADARR_URL"] = connection_url("radarr"); env["RADARR_KEY"] = rcfg["api_key"]
         env["SONARR_URL"] = connection_url("sonarr"); env["SONARR_KEY"] = scfg["api_key"]
+        env["RADARR_DAILY_SEARCH_BUDGET"] = str(daily_search_budget("radarr"))
+        env["SONARR_DAILY_SEARCH_BUDGET"] = str(daily_search_budget("sonarr"))
         if searches_per_run:
             # Manual number = successful upgrades wanted.
             env["SMART_OPTIMIZER_TARGET_GRABS"] = str(searches_per_run)
@@ -1048,7 +1065,7 @@ def page():
     runstat = manual_status("radarr")
     runlabel = "Idle" if not runstat["requested"] else ("%s%s · %d / %d searched" % (runstat["state"].capitalize(), (" · Searching " + runstat["current"]) if runstat.get("running") and runstat.get("current") else "", runstat["searched"], runstat["requested"]))
     actions = """<div class="controlbar primary"><form class="controlbox manualform" method="post" action="/manual-search"><input type="hidden" name="app" value="radarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="0"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-radarr" class="manualstate">%s</span></div>
-<form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="radarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", html.escape(runlabel), rule_min, rule_max, used, RADARR_BASE_BUDGET + extra_today, extra_today)
+<form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="radarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", html.escape(runlabel), rule_min, rule_max, used, daily_search_budget("radarr") + extra_today, extra_today)
     output = """<div class="sidecontent">
 <div class="metricline"><span>Downsize range</span><b>%.1f – %.1f%%</b></div>
 <div class="metricline"><span>Resolution policy</span><b>Downsize only</b></div>
@@ -1058,7 +1075,7 @@ def page():
 </div>""" % (
         rule_min,
         rule_max,
-        RADARR_BASE_BUDGET,
+        daily_search_budget("radarr"),
         extra_today,
         "good" if not runstat["running"] else "",
         "Running" if runstat["running"] else "Ready"
@@ -1474,6 +1491,7 @@ def settings_page(message="", bad=False):
     def card(app, cfg, default_port):
         name = app.capitalize()
         masked = "Configured · leave blank to keep current key" if cfg["api_key"] else "Not configured"
+        budget = daily_search_budget(app)
         return """<div class="panel"><div class="panelhead"><div><h3>%s connection</h3><p>Configure the %s API used by the dashboard and optimizer.</p></div><span class="badge">%s</span></div>
 <form method="post" action="/connection-settings" class="sidecontent">
 <input type="hidden" name="app" value="%s">
@@ -1482,9 +1500,9 @@ def settings_page(message="", bad=False):
 <div class="metricline"><span>Port</span><input name="port" type="number" min="1" max="65535" value="%d" placeholder="%d" required></div>
 <div class="metricline"><span>API key</span><input name="api_key" type="password" value="" placeholder="%s" autocomplete="new-password"></div>
 <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px"><button name="action" value="test" type="submit">Test connection</button><button name="action" value="save" type="submit">Save</button></div>
-</form></div>""" % (name, name, "CONFIGURED" if cfg["api_key"] else "SETUP", app,
+</form><form method="post" action="/budget-settings" class="sidecontent" style="border-top:1px solid rgba(255,255,255,.08);margin-top:8px;padding-top:16px"><div class="metricline"><span>Daily search budget</span><input name="budget" type="number" min="1" max="100000" value="%d" required></div><input type="hidden" name="app" value="%s"><div style="display:flex;justify-content:flex-end;margin-top:12px"><button type="submit">Save budget</button></div></form></div>""" % (name, name, "CONFIGURED" if cfg["api_key"] else "SETUP", app,
             " selected" if cfg["scheme"] == "http" else "", " selected" if cfg["scheme"] == "https" else "",
-            html.escape(cfg["host"], quote=True), cfg["port"], default_port, masked)
+            html.escape(cfg["host"], quote=True), cfg["port"], default_port, masked, budget, app)
     return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer · Settings</title><style>%s</style></head><body><div class="shell">
 <div class="topbar compact"><div class="brand"><div class="brandcopy"><h1>Connection settings</h1><div>Radarr and Sonarr API connections.</div></div></div><div class="nav"><a class="badge" href="/">← Smart Optimizer</a></div></div>
 %s
@@ -1571,7 +1589,7 @@ def sonarr_page():
     elif not runstat.get("running") and runstat.get("last"):
         runlabel += "<span class='runitem'>Last searched: %s</span>" % html.escape(runstat["last"])
     son_actions = """<div class="controlbar primary"><form class="controlbox manualform" method="post" action="/manual-search"><input type="hidden" name="app" value="sonarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="0"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-sonarr" class="manualstate">%s</span></div>
-<form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="sonarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span><span class="badge">UHD 1080→2160 exception unchanged</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", runlabel, rule_min, rule_max, used, SONARR_BASE_BUDGET + extra_today, extra_today)
+<form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="sonarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span><span class="badge">UHD 1080→2160 exception unchanged</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", runlabel, rule_min, rule_max, used, daily_search_budget("sonarr") + extra_today, extra_today)
     err = ("<div class='notice bad'>Sonarr API error: %s</div>" % html.escape(error)) if error else ""
     connection_status = "Online" if api_online("sonarr") else "Offline"
     return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer UI · Sonarr</title><style>%s</style></head><body><div class="shell">
@@ -1959,7 +1977,7 @@ if(modeButton){
 %s
 </body></html>""" % (
         CSS, "" if connection_status == "Online" else " bad", html.escape(connection_status), son_actions, err, exclusion_panel("sonarr"), "good" if saved >= 0 else "bad", gib(saved), positive, len(queue), used, extra_today,
-        rows, rule_min, rule_max, SONARR_BASE_BUDGET, extra_today, len(queue), qrows,
+        rows, rule_min, rule_max, daily_search_budget("sonarr"), extra_today, len(queue), qrows,
         "good" if reduction_pct >= 0 else "bad", reduction_pct, positive, len(queue),
         html.escape(last_date), AJAX_SCRIPT)
 
@@ -2082,6 +2100,19 @@ class Handler(BaseHTTPRequestHandler):
                     rendered = settings_page("%s settings saved and connection verified." % app.capitalize())
             except Exception as exc:
                 rendered = settings_page("%s: %s" % (app.capitalize(), str(exc)), True)
+            body = rendered.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body); return
+        if self.path == "/budget-settings":
+            if not ENABLE_ACTIONS:
+                self.send_error(403); return
+            app = (form.get("app") or [""])[0]
+            if app not in ("radarr", "sonarr"):
+                self.send_error(400); return
+            try:
+                update_daily_search_budget(app, int((form.get("budget") or [""])[0]))
+                rendered = settings_page("%s daily search budget saved." % app.capitalize())
+            except Exception as exc:
+                rendered = settings_page(str(exc), True)
             body = rendered.encode("utf-8")
             self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body); return
         if self.path == "/settings":
