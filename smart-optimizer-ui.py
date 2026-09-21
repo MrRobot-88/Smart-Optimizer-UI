@@ -35,7 +35,7 @@ RADARR_BASE_BUDGET = int(os.environ.get("RADARR_DAILY_SEARCH_BUDGET", "400"))
 SONARR_BASE_BUDGET = int(os.environ.get("SONARR_DAILY_SEARCH_BUDGET", "400"))
 MAX_MANUAL = max(1, int(os.environ.get("SMART_UI_MAX_MANUAL_SEARCHES", "10000")))
 CONNECTION_FILE = os.environ.get("SMART_OPTIMIZER_CONNECTIONS", os.path.join(BASE_DIR, "smart-optimizer-connections.json"))
-LIBRARY_CACHE_DIR = os.environ.get("SMART_OPTIMIZER_CACHE_DIR", os.path.dirname(CONTROL_FILE) or BASE_DIR)
+LIBRARY_CACHE_DIR = os.environ.get("SMART_OPTIMIZER_CACHE_DIR", "/data")
 LIBRARY_CACHE_REFRESH_SECONDS = max(30, int(os.environ.get("SMART_OPTIMIZER_CACHE_REFRESH_SECONDS", "60")))
 LIBRARY_CACHE_FILES = {
     "radarr": os.path.join(LIBRARY_CACHE_DIR, "radarr-library-cache.json"),
