@@ -1075,7 +1075,7 @@ def page():
 </div>""" % (
         rule_min,
         rule_max,
-        RADARR_BASE_BUDGET,
+        daily_search_budget("radarr"),
         extra_today,
         "good" if not runstat["running"] else "",
         "Running" if runstat["running"] else "Ready"
