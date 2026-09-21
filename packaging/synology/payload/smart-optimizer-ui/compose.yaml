@@ -1,7 +1,7 @@
 services:
   smart-optimizer-ui:
     image: ghcr.io/mrrobot-88/smart-optimizer-ui:latest
-    container_name: smart-optimizer-ui
+    container_name: smart-optimizer-ui-spk
     network_mode: host
     restart: unless-stopped
     environment:
