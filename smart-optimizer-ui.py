@@ -2347,4 +2347,5 @@ if __name__ == "__main__":
     print("Actions:", "ENABLED" if ENABLE_ACTIONS else "disabled (read-only)")
     if HOST not in ("127.0.0.1", "localhost", "::1"):
         print("WARNING: UI has no built-in authentication; expose only on a trusted LAN/reverse proxy.")
-    threading.Thread(target=library_cache_worker, daemon=True).start()\n    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    threading.Thread(target=library_cache_worker, daemon=True).start()
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
