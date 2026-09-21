@@ -64,7 +64,7 @@ The Docker image remains the primary cross-platform distribution. A Synology DSM
 
 The SPK is architecture-independent itself (`noarch`); the underlying container is still selected automatically from the published `linux/amd64`, `linux/arm64` and `linux/arm/v7` images. Synology models that cannot install/run Container Manager should continue to use another supported Docker host rather than this SPK.
 
-The SPK build is available from the repository's **Build Synology SPK** GitHub Actions artifact after a successful workflow run. Native Debian/Ubuntu `.deb`, RPM `.rpm`, QNAP `.qpkg` and other vendor-specific packages are not currently published.
+Tagged GitHub releases automatically include the matching versioned Synology `.spk` asset. The SPK itself is `noarch`; when installed, Container Manager pulls the matching Docker image for `linux/amd64`, `linux/arm64` or `linux/arm/v7`. Workflow artifacts are also retained after successful SPK builds. Native Debian/Ubuntu `.deb`, RPM `.rpm`, QNAP `.qpkg` and other vendor-specific packages are not currently published.
 
 ## Recommended install: Portainer Stack
 
