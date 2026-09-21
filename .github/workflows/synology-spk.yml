@@ -13,6 +13,9 @@ on:
       - ".github/workflows/synology-spk.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-spk:
     runs-on: ubuntu-latest
@@ -55,3 +58,12 @@ jobs:
           name: SmartOptimizerUI-Synology-SPK
           path: dist/*.spk
           if-no-files-found: error
+
+      - name: Attach SPK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SPK="$(find dist -name '*.spk' -print -quit)"
+          test -n "$SPK"
+          gh release upload "$GITHUB_REF_NAME" "$SPK" --clobber
