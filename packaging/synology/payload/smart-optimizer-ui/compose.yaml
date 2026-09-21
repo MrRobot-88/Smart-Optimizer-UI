@@ -9,5 +9,5 @@ services:
       SMART_UI_HOST: 0.0.0.0
       SMART_UI_PORT: "8788"
     volumes:
-      - /var/packages/smartoptimizerui/var/config:/config
-      - /var/packages/smartoptimizerui/var/data:/data
+      - ./config:/config
+      - ./data:/data
