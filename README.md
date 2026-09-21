@@ -128,3 +128,24 @@ API keys are secrets. Keep the persistent config directory private, do not commi
 - [Radarr Smart Optimizer](https://github.com/MrRobot-88/Radarr-Smart-Optimizer)
 - [Sonarr Smart Optimizer](https://github.com/MrRobot-88/Sonarr-Smart-Optimizer)
 - [Deluge Smart Cleanup](https://github.com/MrRobot-88/Deluge-Smart-Cleanup)
+
+## Release highlights
+
+The current release includes:
+
+- Combined Radarr + Sonarr web dashboard
+- Browser-based connection configuration
+- Independent Radarr and Sonarr optimizer settings/status
+- Persistent A-Z optimizer queues
+- Manual runs targeting successful grabs rather than search attempts
+- Live current-item and progress reporting
+- Download radar and recent file-change history
+- Optimizer-only exclusions with library search, recent exclusions and full exclusion management
+- Radarr storage-first replacement policy
+- Sonarr low-resolution upgrade support up to +50% size growth for existing content below 1080p
+- HDR/Dolby Vision safety rules
+- AV1 rejection
+- Audio/channel protection and Atmos-aware ranking
+- Persistent state, daily search budgets and temporary extra searches
+
+Radarr and Sonarr intentionally use different replacement policies. See their standalone repositories for the detailed rules.
