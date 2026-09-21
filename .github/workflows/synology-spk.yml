@@ -3,12 +3,11 @@ name: Build Synology SPK
 on:
   push:
     branches: [main]
+    tags: ["v*"]
     paths:
       - "packaging/synology/**"
       - ".github/workflows/synology-spk.yml"
   workflow_dispatch:
-  tags:
-    - "v*"
 
 jobs:
   build-spk:
