@@ -40,6 +40,28 @@ The two optimizers intentionally do **not** use identical replacement rules.
 
 Both engines include conservative dynamic-range rules, reject AV1 candidates, reject Dolby Vision-only candidates without HDR fallback, and apply audio safety/ranking logic. See the standalone READMEs for the detailed engine policies.
 
+## Supported platforms
+
+The prebuilt Docker image is officially published for:
+
+- `linux/amd64` — Intel/AMD 64-bit systems
+- `linux/arm64` — 64-bit ARM systems
+- `linux/arm/v7` — 32-bit ARMv7 systems
+
+This covers Docker-capable systems across many common platforms, including Linux servers, Synology, QNAP, ASUSTOR, Unraid, TrueNAS SCALE, Raspberry Pi and other NAS/home-server systems, provided the device supports one of the architectures above and can run Docker/containers.
+
+Everyone uses the same image:
+
+```text
+ghcr.io/mrrobot-88/smart-optimizer-ui:latest
+```
+
+Docker or Portainer automatically selects the matching architecture.
+
+### Native packages
+
+Native platform packages such as Synology `.spk`, Debian/Ubuntu `.deb`, RPM `.rpm`, QNAP `.qpkg` and other vendor-specific packages are **not currently published**. They may be added in the future after they have dedicated packaging, installation/update handling and testing. For now, Docker is the supported cross-platform installation method.
+
 ## Recommended install: Portainer Stack
 
 The easiest way to run Smart Optimizer UI is with the prebuilt container from GitHub Container Registry. **No cloning, Python installation or local Docker build is required.**
