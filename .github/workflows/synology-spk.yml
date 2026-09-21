@@ -5,6 +5,10 @@ on:
     branches: [main]
     tags: ["v*"]
     paths:
+      - "smart-optimizer-ui.py"
+      - "radarr-smart-optimizer.py"
+      - "sonarr-smart-optimizer.py"
+      - "Dockerfile"
       - "packaging/synology/**"
       - ".github/workflows/synology-spk.yml"
   workflow_dispatch:
