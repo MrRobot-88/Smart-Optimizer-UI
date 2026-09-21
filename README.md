@@ -2,7 +2,7 @@
 
 One web dashboard for **Sonarr Smart Optimizer + Radarr Smart Optimizer**.
 
-The project provides a combined UI for configuring connections, controlling optimizer runs, viewing live progress, inspecting downloads/history and managing optimizer-only exclusions.
+The project provides a combined UI for configuring connections, controlling optimizer runs, viewing live progress, inspecting downloads/history and managing optimizer-only exclusions. The container image bundles both optimizer engines, so the UI is self-contained and does not require separate Radarr/Sonarr optimizer script downloads.
 
 The standalone projects remain available for users who prefer to run the engines without the UI:
 
@@ -90,7 +90,7 @@ services:
 
 Before deploying, change `TZ` from `Etc/UTC` to your local IANA timezone if you want local timestamps. Leaving it as `Etc/UTC` is also valid.
 
-Click **Deploy the stack**. Docker/Portainer will pull the correct image automatically for supported `linux/amd64` or `linux/arm64` systems.
+Click **Deploy the stack**. Docker/Portainer will pull the correct image automatically for supported `linux/amd64`, `linux/arm64` or `linux/arm/v7` systems.
 
 A ready-made copy is also included in this repository as **`portainer-stack.yml`**.
 
