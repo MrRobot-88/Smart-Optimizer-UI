@@ -14,6 +14,8 @@ ui = ui_path.read_text(encoding="utf-8")
 
 EXPECTED_RAD = "2328335f24ed059836de64ef86b8bc94a3a45da21e782db791cbde71374a6a06"
 EXPECTED_UI = "1eba024b955fa9bbbe19d419bb978d7a64f7d9fd1c8d9da8b8576cb61a0c669f"
+TARGET_RAD = "d5004fdaf4c6dd1aa7e4f04be29c94268f7d2440a1f4bf21566dbe72a44b6882"
+TARGET_UI = "3d79fcff9a409d9468a8f11f606fb92e696b6d12cf2bff63c80bc08f92a69d9a"
 
 def sha(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -364,6 +366,11 @@ ui = once(
 ''',
     "UI post-import root-file guard",
 )
+
+if sha(rad) != TARGET_RAD:
+    raise SystemExit("STOP: unexpected patched Radarr hash: " + sha(rad))
+if sha(ui) != TARGET_UI:
+    raise SystemExit("STOP: unexpected patched UI hash: " + sha(ui))
 
 rad_path.write_text(rad, encoding="utf-8")
 ui_path.write_text(ui, encoding="utf-8")
