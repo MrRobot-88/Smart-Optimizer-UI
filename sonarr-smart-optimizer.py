@@ -102,6 +102,33 @@ try:
 except (TypeError, ValueError):
     TARGET_GRABS = 0
 
+try:
+    TARGET_EPISODE_ID = max(
+        0,
+        int(os.environ.get("SMART_OPTIMIZER_EPISODE_ID", "0"))
+    )
+except (TypeError, ValueError):
+    TARGET_EPISODE_ID = 0
+
+try:
+    TARGET_SERIES_ID = max(
+        0,
+        int(os.environ.get("SMART_OPTIMIZER_SERIES_ID", "0"))
+    )
+except (TypeError, ValueError):
+    TARGET_SERIES_ID = 0
+
+TARGETED_MODE = bool(
+    TARGET_EPISODE_ID > 0 or TARGET_SERIES_ID > 0
+)
+
+MANUAL_TARGET_MODE = (
+    str(os.environ.get("SMART_OPTIMIZER_MANUAL_TARGET", "0"))
+    .strip()
+    .lower()
+    in ("1", "true", "yes", "on")
+)
+
 if not API_KEY:
     print("ERROR: Sonarr API key is not configured.")
     print()
@@ -884,6 +911,12 @@ def item_from_queue_entry(entry, queued_ids, state):
     except Exception as e:
         print("    SKIP file metadata error:", e, flush=True)
         return None
+    # Episodes already below 400 MiB are small enough that spending an
+    # interactive search/download on further optimization is not worthwhile.
+    current_size_mib = mib(file_obj.get("size", 0))
+    if current_size_mib < 400:
+        return None
+
     resolution = file_resolution(file_obj)
     if not resolution:
         return None
@@ -923,6 +956,92 @@ def optimizer_excluded_series_ids():
         }
     except Exception:
         return set()
+
+
+def targeted_episode_item(episode_id, queued_ids, state):
+    ep = get("/episode/%d" % int(episode_id))
+
+    entry = {
+        "episode_id": int(ep["id"]),
+        "series_id": int(ep["seriesId"]),
+        "season": int(ep.get("seasonNumber", 0)),
+        "episode": int(ep.get("episodeNumber", 0)),
+    }
+
+    return item_from_queue_entry(entry, queued_ids, state)
+
+
+def targeted_series_items(series_id, queued_ids, state):
+    """
+    Temporary work list for one manually selected Sonarr series.
+
+    Does not consume or advance the persistent A-Z queue.
+    Existing item_from_queue_entry() remains the eligibility gate.
+    """
+    series_id = int(series_id)
+
+    if series_id in optimizer_excluded_series_ids():
+        print(
+            "TARGETED SERIES IS EXCLUDED: %d" % series_id,
+            flush=True
+        )
+        return []
+
+    series = get("/series/%d" % series_id)
+    episodes = get("/episode?seriesId=%d" % series_id)
+
+    if not isinstance(episodes, list):
+        return []
+
+    items = []
+
+    for ep in episodes:
+        try:
+            episode_id = int(ep.get("id") or 0)
+
+            if episode_id <= 0:
+                continue
+
+            entry = {
+                "episode_id": episode_id,
+                "series_id": series_id,
+                "season": int(ep.get("seasonNumber", 0)),
+                "episode": int(ep.get("episodeNumber", 0)),
+            }
+
+            item = item_from_queue_entry(
+                entry,
+                queued_ids,
+                state
+            )
+
+            if item is not None:
+                items.append(item)
+
+        except Exception as exc:
+            print(
+                "TARGETED SERIES EPISODE SKIP:",
+                ep.get("id"),
+                exc,
+                flush=True
+            )
+
+    items.sort(
+        key=lambda x: (
+            int(x.get("season", 0)),
+            int(x.get("episode", 0))
+        )
+    )
+
+    print(
+        "TARGETED SERIES:",
+        series.get("title") or series_id,
+        "| eligible episodes:",
+        len(items),
+        flush=True
+    )
+
+    return items
 
 
 def next_work_items(state, queued_ids, limit):
@@ -1077,6 +1196,14 @@ def evaluate_release(item, release, state):
         item.get("dynamic_range", "HDR" if item.get("hdr") else "SDR_UNKNOWN"),
         dynamic_range
     ):
+        print(
+            "    HDR/DV RULE: current=%s candidate=%s | REJECT"
+            % (
+                item.get("dynamic_range", "HDR" if item.get("hdr") else "SDR_UNKNOWN"),
+                dynamic_range
+            ),
+            flush=True
+        )
         return None
 
     old_size = item["size_mib"]
@@ -1098,7 +1225,7 @@ def evaluate_release(item, release, state):
     #
     # Existing SD/480p/720p episodes may upgrade toward the resolution wanted
     # by their Sonarr profile. The replacement may be smaller, equal-sized,
-    # or at most 50% larger than the existing episode.
+    # or at most 40% larger than the existing episode.
     #
     # Example:
     #   720p 1.2 GiB -> 1080p 700 MiB  = PASS
@@ -1113,7 +1240,7 @@ def evaluate_release(item, release, state):
     )
 
     if is_lowres_upgrade:
-        MAX_LOWRES_UPGRADE_INCREASE_PERCENT = 50.0
+        MAX_LOWRES_UPGRADE_INCREASE_PERCENT = 40.0
         max_upgrade_size = old_size * (
             1.0 + MAX_LOWRES_UPGRADE_INCREASE_PERCENT / 100.0
         )
@@ -1169,6 +1296,11 @@ def evaluate_release(item, release, state):
 
     if old_audio is not None:
         if candidate_audio is None:
+            print(
+                "    AUDIO RULE: current=%.1fch candidate=unknown | REJECT"
+                % old_audio,
+                flush=True
+            )
             return None
 
         # HARD AUDIO RULE:
@@ -1254,7 +1386,7 @@ def choose_best(item, releases, state):
     #
     # LOW-RESOLUTION POLICY -- SONARR ONLY:
     # Current resolution below 1080p may upgrade toward the profile target.
-    # Candidate may be smaller, equal-size, or at most +50% larger.
+    # Candidate may be smaller, equal-size, or at most +40% larger.
     dr_rank = {
         "DV_HDR": 3,
         "HDR": 2,
@@ -1375,7 +1507,7 @@ def main():
 
     print("Daily interactive-search budget:", DAILY_SEARCH_BUDGET + DAILY_EXTRA_BUDGET, "(base %d + today override %d)" % (DAILY_SEARCH_BUDGET, DAILY_EXTRA_BUDGET))
     print("Same-resolution saving window: %.1f%% to %.1f%%" % (MIN_SAVING_PERCENT, MAX_SAVING_PERCENT))
-    print("Low-resolution upgrade rule: current <1080p may upgrade toward profile target with max +50% size growth")
+    print("Low-resolution upgrade rule: current <1080p may upgrade toward profile target with max +40% size growth")
     print()
 
     used = searches_used_today(state)
@@ -1383,7 +1515,11 @@ def main():
     # Maximum interactive searches in one execution.
     PER_RUN_SEARCH_BUDGET = max(1, SEARCHES_PER_RUN)
 
-    if LIVE:
+    if MANUAL_TARGET_MODE:
+        # Targeted Manual Optimizer runs are intentionally independent
+        # of the scheduled persistent daily-search allowance.
+        remaining = PER_RUN_SEARCH_BUDGET
+    elif LIVE:
         remaining = min(
             PER_RUN_SEARCH_BUDGET,
             max(0, DAILY_SEARCH_BUDGET + DAILY_EXTRA_BUDGET - used)
@@ -1405,7 +1541,7 @@ def main():
         remaining
     )
 
-    if remaining <= 0:
+    if remaining <= 0 and not MANUAL_TARGET_MODE:
         print()
         print("Daily search budget exhausted.")
         print("Nothing to do.")
@@ -1423,12 +1559,36 @@ def main():
 
     print()
 
-    print("Loading persistent A-Z queue...")
-    if not state.get("queue_initialized"):
-        initialize_work_queue(state)
-    append_new_series(state)
+    targeted_series = []
 
-    target_searches = remaining
+    if TARGET_EPISODE_ID > 0:
+        print("TARGETED EPISODE MODE:", TARGET_EPISODE_ID)
+        print("Persistent A-Z queue/cursor will not be consumed.")
+
+    elif TARGET_SERIES_ID > 0:
+        print("TARGETED SERIES MODE:", TARGET_SERIES_ID)
+        print("Persistent A-Z queue/cursor will not be consumed.")
+        print("Scheduled daily search allowance will not be consumed.")
+
+        targeted_series = targeted_series_items(
+            TARGET_SERIES_ID,
+            queued_ids,
+            state
+        )
+
+    else:
+        print("Loading persistent A-Z queue...")
+        if not state.get("queue_initialized"):
+            initialize_work_queue(state)
+        append_new_series(state)
+
+    if TARGET_EPISODE_ID > 0:
+        target_searches = 1
+    elif TARGET_SERIES_ID > 0:
+        target_searches = min(100, len(targeted_series))
+    else:
+        target_searches = remaining
+
     searches = 0
     grabs = 0
     no_match = 0
@@ -1442,13 +1602,51 @@ def main():
     # not satisfy that target, but every /release lookup still consumes the
     # normal daily/per-run search budget.
     while searches < target_searches and (TARGET_GRABS <= 0 or grabs < TARGET_GRABS):
-        actual_left = max(0, DAILY_SEARCH_BUDGET + DAILY_EXTRA_BUDGET - searches_used_today(state))
-        if LIVE and actual_left <= 0:
-            print("Daily interactive-search budget exhausted.", flush=True)
-            break
+        if not MANUAL_TARGET_MODE:
+            actual_left = max(
+                0,
+                DAILY_SEARCH_BUDGET
+                + DAILY_EXTRA_BUDGET
+                - searches_used_today(state)
+            )
+            if LIVE and actual_left <= 0:
+                print(
+                    "Daily interactive-search budget exhausted.",
+                    flush=True
+                )
+                break
 
-        selected = next_work_items(state, queued_ids, 1)
+        if TARGET_EPISODE_ID > 0:
+            if number > 0:
+                break
+
+            targeted = targeted_episode_item(
+                TARGET_EPISODE_ID,
+                queued_ids,
+                state
+            )
+            selected = [targeted] if targeted else []
+
+        elif TARGET_SERIES_ID > 0:
+            if number >= len(targeted_series):
+                break
+
+            selected = [targeted_series[number]]
+
+        else:
+            selected = next_work_items(
+                state,
+                queued_ids,
+                1
+            )
+
         if not selected:
+            if TARGET_EPISODE_ID > 0:
+                print(
+                    "TARGETED EPISODE SKIPPED: unavailable, queued, "
+                    "below 400 MiB, or otherwise ineligible.",
+                    flush=True
+                )
             break
 
         item = selected[0]
@@ -1463,8 +1661,10 @@ def main():
             searches += 1
             print("    SEARCH PROGRESS: %d / %d" % (searches, target_searches), flush=True)
             if LIVE:
-                increment_search_count(state)
-                mark_episode_searched(state, episode_id)
+                if not MANUAL_TARGET_MODE:
+                    increment_search_count(state)
+                    mark_episode_searched(state, episode_id)
+
                 save_state(state)
         except Exception as e:
             errors += 1
