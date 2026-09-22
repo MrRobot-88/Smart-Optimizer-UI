@@ -1,0 +1,52 @@
+name: Reconstruct v1.1.0 release sources
+
+on:
+  push:
+    branches:
+      - release-v1.1.0-direct
+    paths:
+      - ".release-upload/**"
+      - ".github/workflows/reconstruct-v1.1.0.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  reconstruct:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out release branch
+        uses: actions/checkout@v4
+
+      - name: Reconstruct exact tested sources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat .release-upload/ui.part* | base64 -d | gzip -d > smart-optimizer-ui.py
+          cat .release-upload/radarr.part* | base64 -d | gzip -d > radarr-smart-optimizer.py
+          cat .release-upload/sonarr.part* | base64 -d | gzip -d > sonarr-smart-optimizer.py
+
+          python3 -m py_compile             smart-optimizer-ui.py             radarr-smart-optimizer.py             sonarr-smart-optimizer.py
+
+          if grep -nE '192\.168\.|172\.17\.|10\.[0-9]+\.[0-9]+\.[0-9]+'             smart-optimizer-ui.py radarr-smart-optimizer.py sonarr-smart-optimizer.py
+          then
+            echo "Private/local IP literal found in release source"
+            exit 1
+          fi
+
+          echo "Source reconstruction and public-IP scan: OK"
+
+      - name: Commit reconstructed sources and remove staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .release-upload
+          rm -f .github/workflows/reconstruct-v1.1.0.yml
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+          git commit -m "Sync tested Smart Optimizer v1.1.0 sources"
+          git push
