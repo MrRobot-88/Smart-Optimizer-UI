@@ -27,10 +27,12 @@ movie={
  }
 }
 assert rad.movie_item(movie,s,set()) is None
+internal=dict(s); internal['movies']=dict(s['movies']); internal['auto_processed_movie_ids']=list(s['auto_processed_movie_ids'])
+assert rad.movie_item(movie,internal,set()) is None
 manual=dict(s); manual['movies']=dict(s['movies']); manual['movies'].pop('20',None); manual['auto_processed_movie_ids']=[10]
 item=rad.movie_item(movie,manual,set())
 assert item and item['movie_id']==20
-print('FIXTURE PASS: Radarr automatic is blocked forever while manual retry bypasses')
+print('FIXTURE PASS: Radarr automatic/internal retry blocked; explicit manual retry bypasses')
 
 ss=son.blank_state()
 ss['series_queue']=[{'series_id':1,'series_title':'A'},{'series_id':2,'series_title':'B'},{'series_id':3,'series_title':'C'}]
