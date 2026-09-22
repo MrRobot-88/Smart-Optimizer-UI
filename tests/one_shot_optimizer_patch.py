@@ -107,12 +107,20 @@ rad=once(rad,
 ''',
 '''            targeted_state = dict(state)
             targeted_state["movies"] = dict(state.get("movies", {}))
-            targeted_state["movies"].pop(str(TARGET_MOVIE_ID), None)
-            targeted_state["auto_processed_movie_ids"] = [
-                x
-                for x in state.get("auto_processed_movie_ids", [])
-                if int(x) != TARGET_MOVIE_ID
-            ]
+            targeted_state["auto_processed_movie_ids"] = list(
+                state.get("auto_processed_movie_ids", [])
+            )
+
+            # Only an explicit Manual Optimizer request may bypass the
+            # permanent one-shot gate. Automatic/internal targeted retries
+            # remain blocked and require the user to retry manually.
+            if MANUAL_TARGET_MODE:
+                targeted_state["movies"].pop(str(TARGET_MOVIE_ID), None)
+                targeted_state["auto_processed_movie_ids"] = [
+                    x
+                    for x in targeted_state["auto_processed_movie_ids"]
+                    if int(x) != TARGET_MOVIE_ID
+                ]
 
 ''','rad manual bypass')
 rad=once(rad,
