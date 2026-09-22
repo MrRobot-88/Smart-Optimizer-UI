@@ -17,11 +17,17 @@ The standalone projects remain available for users who prefer to run the engines
 - Online/offline API status
 - Persistent optimizer queues and state
 - Manual optimizer runs with live **current item** and progress
+- Dedicated **Manual Optimizer** mode with cached Radarr movie / Sonarr series search
+- Target one movie or series without consuming the normal persistent A-Z queue
+- Explicit Manual Optimizer runs are separated from normal daily-search accounting
+- Manual result buttons report **Starting**, **Searching**, **No Upgrade** or **Downloading**
 - Manual amount represents successful upgrades/grabs rather than merely attempted searches
 - STOP control for UI-started runs
 - Adjustable minimum/maximum downsize window
 - Daily search budget plus date-scoped temporary extra searches
 - Current download radar and recent file-change history
+- Radarr/Sonarr library cache refreshed in the background, so library search does not query the Arr API on every keystroke
+- Optimizer-owned Radarr downloads can recover safely from source-tier-only import rejection without globally weakening Radarr quality profiles
 - Optimizer-only exclusions:
   - Radarr: exclude individual movies
   - Sonarr: exclude entire series
@@ -34,9 +40,9 @@ The standalone projects remain available for users who prefer to run the engines
 
 The two optimizers intentionally do **not** use identical replacement rules.
 
-**Radarr is storage-first.** Its replacements must remain inside the configured saving window. It does not inherit Sonarr's low-resolution size-growth exception.
+**Radarr is storage-first.** Its replacements must remain inside the configured saving window. It does not inherit Sonarr's low-resolution size-growth exception. Current movie files below **5 GiB** are skipped before an interactive optimizer search.
 
-**Sonarr** has a special low-resolution rule for episodes currently below 1080p: a higher-resolution candidate up to the profile target may be smaller, equal-sized or at most **50% larger**. This exception does not apply to 1080p → 2160p.
+**Sonarr** has a special low-resolution rule for episodes currently below 1080p: a higher-resolution candidate up to the profile target may be smaller, equal-sized or at most **40% larger**. This exception does not apply to 1080p → 2160p. Current episode files below **400 MiB** are skipped before an interactive optimizer search.
 
 Both engines include conservative dynamic-range rules, reject AV1 candidates, reject Dolby Vision-only candidates without HDR fallback, and apply audio safety/ranking logic. See the standalone READMEs for the detailed engine policies.
 
@@ -142,7 +148,9 @@ API keys are stored in the persistent `/config` volume and are not displayed aga
 
 The Radarr and Sonarr dashboards have independent optimizer controls and status. Changing one application's downsize settings does not change the other application's values.
 
-Manual runs use the same persistent optimizer queue as scheduled runs. The requested manual number is a target for successful releases sent to Radarr/Sonarr; unsuccessful searches do not satisfy that target. Search budgets still cap how much work a run may perform.
+The normal manual-count control uses the same persistent optimizer queue as scheduled runs, and the requested number is a target for successful releases sent to Radarr/Sonarr.
+
+The separate **Manual Optimizer** tab is different: it searches the cached library, targets one selected movie or series directly, does not consume the normal A-Z queue, and does not add its searches to the normal daily optimizer counter.
 
 The exclusion search is separate from the normal current-download search. Radarr exclusions operate on movies; Sonarr exclusions operate on whole series. Removing an exclusion only removes the optimizer rule—it does not remove anything from Radarr/Sonarr.
 
@@ -203,7 +211,10 @@ The current release includes:
 - Download radar and recent file-change history
 - Optimizer-only exclusions with library search, recent exclusions and full exclusion management
 - Radarr storage-first replacement policy
-- Sonarr low-resolution upgrade support up to +50% size growth for existing content below 1080p
+- Sonarr low-resolution upgrade support up to +40% size growth for existing content below 1080p
+- Dedicated cached-library Manual Optimizer for one Radarr movie or Sonarr series
+- Radarr 5 GiB current-file search floor and Sonarr 400 MiB current-episode search floor
+- Radarr optimizer-owned safe import handling for source-tier-only import blocks
 - HDR/Dolby Vision safety rules
 - AV1 rejection
 - Audio/channel protection and Atmos-aware ranking
