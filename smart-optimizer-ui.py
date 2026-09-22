@@ -5,6 +5,7 @@ Standard library only. The optimizer remains fully usable without this file.
 """
 
 import html
+import http.cookiejar
 import json
 import os
 import re
@@ -35,15 +36,20 @@ RADARR_BASE_BUDGET = int(os.environ.get("RADARR_DAILY_SEARCH_BUDGET", "400"))
 SONARR_BASE_BUDGET = int(os.environ.get("SONARR_DAILY_SEARCH_BUDGET", "400"))
 MAX_MANUAL = max(1, int(os.environ.get("SMART_UI_MAX_MANUAL_SEARCHES", "10000")))
 CONNECTION_FILE = os.environ.get("SMART_OPTIMIZER_CONNECTIONS", os.path.join(BASE_DIR, "smart-optimizer-connections.json"))
+
 LIBRARY_CACHE_DIR = os.environ.get("SMART_OPTIMIZER_CACHE_DIR", "/data")
-LIBRARY_CACHE_REFRESH_SECONDS = max(30, int(os.environ.get("SMART_OPTIMIZER_CACHE_REFRESH_SECONDS", "60")))
+LIBRARY_CACHE_REFRESH_SECONDS = 60
+
 LIBRARY_CACHE_FILES = {
     "radarr": os.path.join(LIBRARY_CACHE_DIR, "radarr-library-cache.json"),
     "sonarr": os.path.join(LIBRARY_CACHE_DIR, "sonarr-library-cache.json"),
 }
-library_cache_lock = threading.Lock()
-library_cache_refreshing = {"radarr": False, "sonarr": False}
 
+library_cache_lock = threading.Lock()
+library_cache_refreshing = {
+    "radarr": False,
+    "sonarr": False,
+}
 
 def load_connections():
     try:
@@ -75,6 +81,115 @@ def connection(app):
 def connection_url(app):
     cfg = connection(app)
     return "%s://%s:%d" % (cfg["scheme"], cfg["host"], cfg["port"])
+
+def deluge_connection():
+    """Private Deluge Web settings stored outside source code."""
+    data = load_controls().get("deluge", {}) or {}
+    return {
+        "scheme": str(data.get("scheme") or "http").lower(),
+        "host": str(data.get("host") or "172.17.0.2").strip(),
+        "port": int(data.get("port") or 8112),
+        "password": str(data.get("password") or ""),
+    }
+
+
+def deluge_torrent_status(download_id):
+    """Read one exact torrent from Deluge Web JSON-RPC."""
+    cfg = deluge_connection()
+
+    if not cfg["password"]:
+        raise RuntimeError("Deluge Web password is not configured")
+
+    url = "%s://%s:%d/json" % (
+        cfg["scheme"],
+        cfg["host"],
+        cfg["port"]
+    )
+
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(jar)
+    )
+
+    rpc_id = 0
+
+    def rpc(method, params=None):
+        nonlocal rpc_id
+        rpc_id += 1
+
+        body = json.dumps({
+            "method": method,
+            "params": params or [],
+            "id": rpc_id,
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST"
+        )
+
+        with opener.open(req, timeout=10) as response:
+            result = json.loads(
+                response.read().decode("utf-8") or "{}"
+            )
+
+        if result.get("error"):
+            raise RuntimeError(
+                "Deluge RPC %s failed: %s"
+                % (method, result.get("error"))
+            )
+
+        return result.get("result")
+
+    if rpc("auth.login", [cfg["password"]]) is not True:
+        raise RuntimeError("Deluge Web login failed")
+
+    if rpc("web.connected", []) is not True:
+        raise RuntimeError("Deluge daemon is not connected")
+
+    fields = [
+        "state",
+        "name",
+        "progress",
+        "total_done",
+        "num_seeds",
+        "total_seeds",
+        "num_peers",
+        "total_peers",
+        "download_payload_rate",
+        "distributed_copies",
+        "last_seen_complete",
+    ]
+
+    result = rpc(
+        "core.get_torrent_status",
+        [str(download_id or "").lower(), fields]
+    )
+
+    return result if isinstance(result, dict) else {}
+
+
+def deluge_torrent_is_dead(status):
+    """True only when there is zero evidence of torrent activity."""
+    if not isinstance(status, dict) or not status:
+        return False
+
+    try:
+        return (
+            float(status.get("progress") or 0) <= 0
+            and int(status.get("total_done") or 0) <= 0
+            and int(status.get("num_seeds") or 0) <= 0
+            and int(status.get("num_peers") or 0) <= 0
+            and int(status.get("download_payload_rate") or 0) <= 0
+        )
+    except (TypeError, ValueError):
+        return False
+
 
 def update_connection(app, scheme, host, port, api_key):
     if app not in ("radarr", "sonarr"): raise ValueError("Unknown app")
@@ -233,108 +348,182 @@ def remove_optimizer_exclusion(app, item_id):
 def _library_cache_path(app):
     if app not in ("radarr", "sonarr"):
         raise ValueError("Unknown app")
+
     return LIBRARY_CACHE_FILES[app]
 
 
 def _write_library_cache(app, items):
-    """Persist only the tiny fields needed by exclusion search."""
+    """Atomically store the last known-good library snapshot."""
     path = _library_cache_path(app)
+
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
     payload = {
         "app": app,
         "updated": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "items": items,
     }
+
     tmp = path + ".tmp"
+
     with library_cache_lock:
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+            json.dump(
+                payload,
+                f,
+                ensure_ascii=False,
+                separators=(",", ":")
+            )
             f.flush()
             os.fsync(f.fileno())
+
         os.replace(tmp, path)
 
 
 def _read_library_cache(app):
+    """Read cached library without contacting Radarr/Sonarr."""
     path = _library_cache_path(app)
+
     try:
         with library_cache_lock:
             with open(path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
-        raw = payload.get("items", []) if isinstance(payload, dict) else payload
+
+        if isinstance(payload, dict):
+            raw = payload.get("items", [])
+        else:
+            raw = payload
+
         return raw if isinstance(raw, list) else []
+
     except Exception:
         return []
 
 
 def refresh_library_cache(app):
-    """Fetch Radarr/Sonarr in the background; never blocks exclusion typing."""
+    """
+    Refresh one library in the background.
+
+    A failed API request NEVER destroys the previous good cache.
+    """
+
     if app not in ("radarr", "sonarr"):
         return
+
     if library_cache_refreshing.get(app):
         return
+
     library_cache_refreshing[app] = True
+
     try:
-        raw = radarr_get("/movie") if app == "radarr" else sonarr_get("/series")
+        if app == "radarr":
+            raw = radarr_get("/movie")
+        else:
+            raw = sonarr_get("/series")
+
         items = []
+
         for x in raw if isinstance(raw, list) else []:
             try:
                 item_id = int(x.get("id"))
             except (TypeError, ValueError):
                 continue
+
             items.append({
                 "id": item_id,
                 "title": str(x.get("title") or ""),
                 "year": x.get("year"),
             })
-        items.sort(key=lambda x: (x["title"].casefold(), int(x.get("year") or 0)))
+
+        items.sort(
+            key=lambda x: (
+                x["title"].casefold(),
+                int(x.get("year") or 0)
+            )
+        )
+
         _write_library_cache(app, items)
-        print("[ui] %s library cache refreshed: %d items" % (app, len(items)), flush=True)
+
+        print(
+            "[ui] %s library cache refreshed: %d items"
+            % (app, len(items)),
+            flush=True
+        )
+
     except Exception as exc:
-        # Keep the last known-good cache. A temporary API failure must not
-        # destroy instant search or existing exclusions.
-        print("[ui] %s library cache refresh failed: %s" % (app, exc), flush=True)
+        print(
+            "[ui] %s library cache refresh failed: %s"
+            % (app, exc),
+            flush=True
+        )
+
     finally:
         library_cache_refreshing[app] = False
 
 
-def request_library_cache_refresh(app):
-    threading.Thread(target=refresh_library_cache, args=(app,), daemon=True).start()
-
-
 def library_cache_worker():
-    # Build both caches after UI startup, then keep additions/removals synced.
+    """
+    Keep Radarr + Sonarr cache synchronized.
+
+    Full refresh means:
+      new items appear
+      removed items disappear
+      renamed items update
+    """
+
     while True:
-        for app in ("radarr", "sonarr"):
-            refresh_library_cache(app)
+        refresh_library_cache("radarr")
+        refresh_library_cache("sonarr")
+
         time.sleep(LIBRARY_CACHE_REFRESH_SECONDS)
 
 
 def library_items(app):
-    """Return cached library instantly and overlay live optimizer exclusions."""
+    """
+    Instant exclusion-search library.
+
+    IMPORTANT:
+    The cache is ONLY for finding library items.
+
+    smart-optimizer-control.json remains the authoritative
+    source that determines whether the optimizer skips an item.
+    """
+
     raw = _read_library_cache(app)
-    excluded = {x["id"] for x in optimizer_exclusions(app)}
+
+    excluded = {
+        x["id"]
+        for x in optimizer_exclusions(app)
+    }
+
     out = []
+
     for x in raw:
         try:
             item_id = int(x.get("id"))
         except (TypeError, ValueError):
             continue
+
         out.append({
             "id": item_id,
             "title": str(x.get("title") or ""),
             "year": x.get("year"),
             "excluded": item_id in excluded,
         })
+
     return out
 
 def exclusion_panel(app):
     count = len(optimizer_exclusions(app))
     return (
         "<div class='searchmodebar'>"
-        "<button type='button' id='searchModeToggle' "
-        "class='searchmodebtn'>"
-        "⊘ Exclusions <span>%d</span>"
-        "</button>"
+        "<button type='button' class='searchmodebtn active' "
+        "data-search-mode='current'>↩ Current downloads</button>"
+        "<button type='button' id='exclusionModeButton' "
+        "class='searchmodebtn' data-search-mode='exclude'>"
+        "⊘ Exclusions <span>%d</span></button>"
+        "<button type='button' class='searchmodebtn' "
+        "data-search-mode='manual'>⌕ Manual Optimizer</button>"
         "</div>"
     ) % count
 
@@ -591,78 +780,953 @@ def queue_health(rows):
 
 
 def repair_import(queue_id):
-    """Reprocess one completed Radarr queue item using COPY mode.
-
-    This is intentionally user-triggered. It only handles the specific
-    quality-hierarchy rejection the optimizer understands; all other queue
-    failures remain untouched.
-    """
+    """Safely enroll one legacy optimizer-blocked Radarr import."""
     rows = queue_records()
-    row = next((x for x in rows if str(x.get("id")) == str(queue_id)), None)
+    row = next(
+        (x for x in rows if str(x.get("id")) == str(queue_id)),
+        None
+    )
+
     if not row:
         raise RuntimeError("Queue item is no longer present")
 
     classified = queue_health([row])[0]
+
     if classified.get("health_kind") != "optimizer_blocked":
         raise RuntimeError("This item is not an optimizer import block")
+
     if str(row.get("status") or "").lower() != "completed":
         raise RuntimeError("Download is not completed")
+
     if str(row.get("trackedDownloadState") or "").lower() != "importpending":
         raise RuntimeError("Download is not waiting for import")
+
     if int(row.get("sizeleft") or 0) != 0:
         raise RuntimeError("Download still has data remaining")
 
-    movie_id = int(row.get("movieId"))
+    movie_id = int(row.get("movieId") or 0)
+
+    if not movie_id:
+        raise RuntimeError("Queue item has no movieId")
+
     movie = radarr_get("/movie/%d" % movie_id)
     old_file = movie.get("movieFile") or {}
+
+    old_file_id = int(old_file.get("id") or 0)
     old_size = int(old_file.get("size") or 0)
     new_size = int(row.get("size") or 0)
-    old_res = (((old_file.get("quality") or {}).get("quality") or {}).get("resolution") or 0)
-    new_res = (((row.get("quality") or {}).get("quality") or {}).get("resolution") or 0)
-    if not old_size or not new_size or not old_res or not new_res:
-        raise RuntimeError("Cannot safely compare current and downloaded file")
-    if int(new_res) < int(old_res):
+
+    old_res = int(
+        (((old_file.get("quality") or {}).get("quality") or {})
+         .get("resolution") or 0)
+    )
+
+    new_res = int(
+        (((row.get("quality") or {}).get("quality") or {})
+         .get("resolution") or 0)
+    )
+
+    if not old_file_id or not old_size:
+        raise RuntimeError("Cannot identify the existing movie file safely")
+
+    if not new_size or not old_res or not new_res:
+        raise RuntimeError(
+            "Cannot safely compare current and downloaded file"
+        )
+
+    if new_res < old_res:
         raise RuntimeError("Refusing resolution downgrade")
-    if int(new_res) == int(old_res) and new_size >= old_size:
-        raise RuntimeError("Refusing same-resolution replacement that is not smaller")
+
+    if new_size >= old_size:
+        raise RuntimeError("Refusing replacement that is not smaller")
+
+    saving = ((old_size - new_size) / old_size) * 100.0
+
+    minimum, maximum, _ = app_controls("radarr")
+
+    if saving < minimum or saving > maximum:
+        raise RuntimeError(
+            "Replacement saving %.2f%% is outside %.1f%%-%.1f%%"
+            % (saving, minimum, maximum)
+        )
 
     download_id = str(row.get("downloadId") or "")
+
     if not download_id:
         raise RuntimeError("Queue item has no downloadId")
 
-    items = radarr_get("/manualimport?downloadId=%s&movieId=%d&filterExistingFiles=true" %
-                       (urllib.parse.quote(download_id), movie_id))
+    items = radarr_get(
+        "/manualimport?downloadId=%s&movieId=%d"
+        "&filterExistingFiles=false"
+        % (urllib.parse.quote(download_id), movie_id)
+    )
+
     usable = []
+
+    allowed_rejections = (
+        "existing file meets cutoff",
+        "not an upgrade for existing movie file",
+        "quality for existing file on disk is of equal or higher preference",
+    )
+
     for item in items if isinstance(items, list) else []:
         rejections = item.get("rejections") or []
-        reasons = " ".join(str((r.get("reason") or r.get("message") or "")) if isinstance(r, dict) else str(r)
-                           for r in rejections).lower()
-        # Only override Radarr's source-quality hierarchy. Anything else stays blocked.
-        bad = [r for r in rejections if "not an upgrade for existing movie file" not in
-               str((r.get("reason") or r.get("message") or "")) .lower()]
-        if not bad:
-            usable.append(item)
-    if len(usable) != 1:
-        raise RuntimeError("Expected exactly one safely reprocessable video file, found %d" % len(usable))
+        bad = []
 
-    item = usable[0]
-    payload = {
-        "name": "ManualImport",
-        "files": [{
-            "path": item.get("path"),
-            "folderName": item.get("folderName"),
-            "quality": item.get("quality"),
-            "languages": item.get("languages") or row.get("languages") or [],
-            "releaseGroup": item.get("releaseGroup"),
-            "indexerFlags": item.get("indexerFlags") or 0,
-            "downloadId": download_id,
-            "movieId": movie_id,
-        }],
-        "importMode": 2
+        for rejection in rejections:
+            reason = str(
+                (
+                    rejection.get("reason")
+                    or rejection.get("message")
+                    or ""
+                )
+                if isinstance(rejection, dict)
+                else rejection
+            ).lower()
+
+            if not any(x in reason for x in allowed_rejections):
+                bad.append(rejection)
+
+        if not bad and item.get("path"):
+            usable.append(item)
+
+    if len(usable) != 1:
+        raise RuntimeError(
+            "Expected exactly one safely reprocessable video file, found %d"
+            % len(usable)
+        )
+
+    state = load_state()
+    pending = state.setdefault("pending_replacements", {})
+    key = str(movie_id)
+
+    existing = pending.get(key)
+
+    if existing:
+        raise RuntimeError(
+            "Smart Optimizer already has a pending replacement "
+            "for this movie"
+        )
+
+    pending[key] = {
+        "movie_id": movie_id,
+        "old_file_id": old_file_id,
+        "old_size": old_size,
+        "approved_title": str(row.get("title") or "").strip(),
+        "approved_size": new_size,
+        "download_id": download_id,
+        "created": int(time.time()),
+        "status": "grabbed",
+        "legacy_repair": True
     }
-    if not payload["files"][0]["path"]:
-        raise RuntimeError("Radarr did not return an importable file path")
-    return radarr_request("/command", method="POST", payload=payload)
+
+    save_radarr_state(state)
+
+    return {
+        "status": "queued",
+        "message": (
+            "Safe optimizer import queued. "
+            "Existing file will remain until the replacement "
+            "has imported and been verified."
+        )
+    }
+
+
+def save_radarr_state(data):
+    """Persist Radarr optimizer state without replacing a bind-mounted inode."""
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+
+def remove_exact_radarr_download(queue_id, movie_id, download_id):
+    """Remove only an exactly revalidated Radarr queue/download item."""
+    rows = queue_records()
+
+    matches = [
+        row for row in rows
+        if int(row.get("id") or 0) == int(queue_id)
+        and int(row.get("movieId") or 0) == int(movie_id)
+        and str(row.get("downloadId") or "").strip().upper()
+        == str(download_id or "").strip().upper()
+    ]
+
+    if len(matches) != 1:
+        raise RuntimeError(
+            "exact Radarr queue ownership revalidation failed"
+        )
+
+    return radarr_request(
+        "/queue/%d?removeFromClient=true&blocklist=false"
+        % int(queue_id),
+        method="DELETE"
+    )
+
+
+def optimizer_import_worker():
+    """Finish only replacements previously approved by Smart Optimizer."""
+    while True:
+        try:
+            state = load_state()
+            pending = state.get("pending_replacements") or {}
+
+            if pending:
+                rows = queue_records()
+                changed = False
+
+                for movie_key, txn in list(pending.items()):
+                    try:
+                        movie_id = int(txn.get("movie_id") or movie_key)
+                        old_file_id = int(txn.get("old_file_id") or 0)
+                        old_size = int(txn.get("old_size") or 0)
+                        approved_title = str(txn.get("approved_title") or "").strip()
+                        approved_size = int(txn.get("approved_size") or 0)
+                        status = str(txn.get("status") or "grabbed")
+
+                        if not old_file_id or not old_size or not approved_title:
+                            continue
+
+                        if status == "grabbed":
+                            matches = []
+
+                            bound_download_id = str(
+                                txn.get("download_id") or ""
+                            ).strip()
+
+                            for row in rows:
+                                if int(row.get("movieId") or 0) != movie_id:
+                                    continue
+
+                                row_download_id = str(
+                                    row.get("downloadId") or ""
+                                ).strip()
+
+                                # Once bound, title matching is no longer used.
+                                # Only the exact downloadId/hash may match.
+                                if bound_download_id:
+                                    if (
+                                        row_download_id.upper()
+                                        == bound_download_id.upper()
+                                    ):
+                                        matches.append(row)
+                                    continue
+
+                                title = str(
+                                    row.get("title") or ""
+                                ).strip()
+
+                                normalized_title = re.sub(
+                                    r"[^a-z0-9]+",
+                                    "",
+                                    title.lower()
+                                )
+                                normalized_approved = re.sub(
+                                    r"[^a-z0-9]+",
+                                    "",
+                                    approved_title.lower()
+                                )
+
+                                if (
+                                    normalized_title
+                                    and normalized_title
+                                    == normalized_approved
+                                ):
+                                    matches.append(row)
+
+                            if len(matches) != 1:
+                                continue
+
+                            row = matches[0]
+
+                            download_id = str(
+                                row.get("downloadId") or ""
+                            ).strip()
+
+                            queue_id = int(row.get("id") or 0)
+
+                            if not download_id or not queue_id:
+                                continue
+
+                            if not bound_download_id:
+                                txn["download_id"] = download_id
+                                txn["queue_id"] = queue_id
+                                txn["bound_at"] = int(time.time())
+                                changed = True
+
+                                state["pending_replacements"] = pending
+                                save_radarr_state(state)
+
+                                print(
+                                    "[radarr-fallback] ownership bound:",
+                                    movie_id,
+                                    "queue",
+                                    queue_id,
+                                    "download",
+                                    download_id
+                                )
+
+                            elif (
+                                download_id.upper()
+                                != bound_download_id.upper()
+                            ):
+                                continue
+
+                            row_status = str(
+                                row.get("status") or ""
+                            ).lower()
+
+                            created = int(
+                                txn.get("grabbed_at")
+                                or txn.get("created")
+                                or time.time()
+                            )
+
+                            age_seconds = max(
+                                0,
+                                int(time.time()) - created
+                            )
+
+                            # MONITOR ONLY.
+                            # No torrent/queue/file deletion in Patch 3C.
+                            if (
+                                age_seconds >= 300
+                                and row_status != "completed"
+                            ):
+                                try:
+                                    health = deluge_torrent_status(
+                                        download_id
+                                    )
+
+                                    if deluge_torrent_is_dead(health):
+                                        retry_count = int(
+                                            txn.get("dead_retry_count") or 0
+                                        )
+
+                                        if retry_count >= 3:
+                                            print(
+                                                "[radarr-fallback] retry cap "
+                                                "reached; keeping download:",
+                                                movie_id
+                                            )
+                                            continue
+
+                                        release_key = str(
+                                            txn.get("release_key") or ""
+                                        ).strip()
+
+                                        attempted = (
+                                            state.get("attempted_releases")
+                                            or {}
+                                        )
+
+                                        if (
+                                            not release_key
+                                            or release_key not in attempted
+                                        ):
+                                            print(
+                                                "[radarr-fallback] release "
+                                                "blacklist not proven; "
+                                                "keeping download:",
+                                                movie_id
+                                            )
+                                            continue
+
+                                        files = radarr_get(
+                                            "/moviefile?movieId=%d"
+                                            % movie_id
+                                        )
+
+                                        old_file = next(
+                                            (
+                                                f for f in files
+                                                if int(
+                                                    f.get("id") or 0
+                                                ) == old_file_id
+                                            ),
+                                            None
+                                        )
+
+                                        if (
+                                            not old_file
+                                            or int(
+                                                old_file.get("size") or 0
+                                            ) != old_size
+                                        ):
+                                            print(
+                                                "[radarr-fallback] original "
+                                                "file changed; refusing "
+                                                "dead cleanup:",
+                                                movie_id
+                                            )
+                                            continue
+
+                                        # Query Deluge a second time
+                                        # immediately before deletion.
+                                        final_health = (
+                                            deluge_torrent_status(
+                                                download_id
+                                            )
+                                        )
+
+                                        if not deluge_torrent_is_dead(
+                                            final_health
+                                        ):
+                                            print(
+                                                "[radarr-fallback] torrent "
+                                                "became active; keeping:",
+                                                movie_id
+                                            )
+                                            continue
+
+                                        remove_exact_radarr_download(
+                                            queue_id,
+                                            movie_id,
+                                            download_id
+                                        )
+
+                                        # Radarr must no longer expose this
+                                        # exact queue/hash.
+                                        remaining = queue_records()
+
+                                        still_present = any(
+                                            int(
+                                                r.get("id") or 0
+                                            ) == queue_id
+                                            or (
+                                                int(
+                                                    r.get("movieId") or 0
+                                                ) == movie_id
+                                                and str(
+                                                    r.get(
+                                                        "downloadId"
+                                                    ) or ""
+                                                ).strip().upper()
+                                                == download_id.upper()
+                                            )
+                                            for r in remaining
+                                        )
+
+                                        if still_present:
+                                            raise RuntimeError(
+                                                "dead download still present "
+                                                "after exact removal"
+                                            )
+
+                                        # The original movie file is the
+                                        # safety anchor and MUST still exist.
+                                        files = radarr_get(
+                                            "/moviefile?movieId=%d"
+                                            % movie_id
+                                        )
+
+                                        old_file = next(
+                                            (
+                                                f for f in files
+                                                if int(
+                                                    f.get("id") or 0
+                                                ) == old_file_id
+                                            ),
+                                            None
+                                        )
+
+                                        if (
+                                            not old_file
+                                            or int(
+                                                old_file.get("size") or 0
+                                            ) != old_size
+                                        ):
+                                            raise RuntimeError(
+                                                "SAFETY ANCHOR CHANGED "
+                                                "after dead cleanup"
+                                            )
+
+                                        txn["dead_retry_count"] = (
+                                            retry_count + 1
+                                        )
+                                        txn["status"] = (
+                                            "dead_removed_retry_pending"
+                                        )
+                                        txn["dead_removed_at"] = int(
+                                            time.time()
+                                        )
+                                        txn["failed_download_id"] = (
+                                            download_id
+                                        )
+                                        txn["failed_queue_id"] = queue_id
+
+                                        # Clear active ownership. The next
+                                        # optimizer grab must establish new
+                                        # ownership itself.
+                                        txn.pop("download_id", None)
+                                        txn.pop("queue_id", None)
+                                        txn.pop("bound_at", None)
+
+                                        changed = True
+
+                                        print(
+                                            "[radarr-fallback] DEAD REMOVED "
+                                            "SAFELY - retry pending:",
+                                            movie_id,
+                                            "attempt",
+                                            retry_count + 1
+                                        )
+
+                                        continue
+                                    else:
+                                        print(
+                                            "[radarr-fallback] torrent "
+                                            "has activity:",
+                                            movie_id,
+                                            download_id
+                                        )
+
+                                except Exception as exc:
+                                    print(
+                                        "[radarr-fallback] Deluge health "
+                                        "check failed - keeping torrent:",
+                                        movie_id,
+                                        exc
+                                    )
+
+                            if row_status != "completed":
+                                continue
+
+                            if str(row.get("trackedDownloadState") or "").lower() != "importpending":
+                                continue
+
+                            if int(row.get("sizeleft") or 0) != 0:
+                                continue
+
+                            download_id = str(row.get("downloadId") or "")
+
+                            if not download_id:
+                                continue
+
+                            files = radarr_get(
+                                "/moviefile?movieId=%d" % movie_id
+                            )
+
+                            old_file = next(
+                                (
+                                    f for f in files
+                                    if int(f.get("id") or 0) == old_file_id
+                                ),
+                                None
+                            )
+
+                            if not old_file:
+                                print(
+                                    "[radarr-import] old file changed; refusing:",
+                                    movie_id
+                                )
+                                continue
+
+                            if int(old_file.get("size") or 0) != old_size:
+                                print(
+                                    "[radarr-import] old file size changed; refusing:",
+                                    movie_id
+                                )
+                                continue
+
+                            items = radarr_get(
+                                "/manualimport?downloadId=%s&movieId=%d"
+                                "&filterExistingFiles=false"
+                                % (
+                                    urllib.parse.quote(download_id),
+                                    movie_id
+                                )
+                            )
+
+                            usable = []
+
+                            # Smart Optimizer may intentionally replace one
+                            # source tier with another (Remux/BluRay/WEB-DL/
+                            # WEBRip/etc.). Only Radarr objections that are
+                            # purely about its native quality/source hierarchy
+                            # may be overridden here.
+                            allowed_rejections = (
+                                "existing file meets cutoff",
+                                "not an upgrade for existing movie file",
+                                "quality for existing file on disk is of equal or higher preference",
+                            )
+
+                            for item in items if isinstance(items, list) else []:
+                                rejections = item.get("rejections") or []
+                                bad = []
+
+                                for rejection in rejections:
+                                    reason = str(
+                                        (
+                                            rejection.get("reason")
+                                            or rejection.get("message")
+                                            or ""
+                                        )
+                                        if isinstance(rejection, dict)
+                                        else rejection
+                                    ).lower()
+
+                                    if not any(
+                                        allowed in reason
+                                        for allowed in allowed_rejections
+                                    ):
+                                        bad.append(rejection)
+
+                                if not bad and item.get("path"):
+                                    usable.append(item)
+
+                            if len(usable) != 1:
+                                print(
+                                    "[radarr-import] safe candidate count:",
+                                    len(usable),
+                                    "movie:",
+                                    movie_id
+                                )
+                                continue
+
+                            item = usable[0]
+
+                            if not item.get("path"):
+                                continue
+
+                            new_size = int(
+                                row.get("size")
+                                or approved_size
+                                or 0
+                            )
+
+                            if new_size <= 0 or new_size >= old_size:
+                                print(
+                                    "[radarr-import] final size check refused:",
+                                    movie_id
+                                )
+                                continue
+
+                            # Re-check the REAL downloaded size, not merely
+                            # the indexer's advertised size.
+                            actual_saving = (
+                                (old_size - new_size) / old_size
+                            ) * 100.0
+
+                            minimum, maximum, _ = app_controls("radarr")
+
+                            if (
+                                actual_saving < minimum
+                                or actual_saving > maximum
+                            ):
+                                print(
+                                    "[radarr-import] actual saving %.2f%% "
+                                    "outside %.1f%%-%.1f%%; OLD FILE KEPT:"
+                                    % (
+                                        actual_saving,
+                                        minimum,
+                                        maximum
+                                    ),
+                                    movie_id
+                                )
+                                txn["status"] = "failed"
+                                changed = True
+                                continue
+
+                            payload = {
+                                "name": "ManualImport",
+                                "files": [{
+                                    "path": item.get("path"),
+                                    "folderName": item.get("folderName"),
+                                    "quality": item.get("quality"),
+                                    "languages": (
+                                        item.get("languages")
+                                        or row.get("languages")
+                                        or []
+                                    ),
+                                    "releaseGroup": item.get("releaseGroup"),
+                                    "indexerFlags": (
+                                        item.get("indexerFlags") or 0
+                                    ),
+                                    "downloadId": download_id,
+                                    "movieId": movie_id
+                                }],
+                                "importMode": "copy"
+                            }
+
+                            result = radarr_request(
+                                "/command",
+                                method="POST",
+                                payload=payload
+                            )
+
+                            command_id = int(result.get("id") or 0)
+
+                            if not command_id:
+                                continue
+
+                            txn["download_id"] = download_id
+                            txn["command_id"] = command_id
+                            txn["status"] = "importing"
+                            txn["actual_download_size"] = new_size
+
+                            changed = True
+
+                            print(
+                                "[radarr-import] import started:",
+                                movie_id,
+                                "command",
+                                command_id
+                            )
+
+                        elif status == "importing":
+                            command_id = int(
+                                txn.get("command_id") or 0
+                            )
+
+                            if not command_id:
+                                continue
+
+                            command = radarr_get(
+                                "/command/%d" % command_id
+                            )
+
+                            command_status = str(
+                                command.get("status") or ""
+                            ).lower()
+
+                            command_result = str(
+                                command.get("result") or ""
+                            ).lower()
+
+                            if command_status in ("failed", "aborted"):
+                                txn["status"] = "failed"
+                                changed = True
+                                print(
+                                    "[radarr-import] import failed; "
+                                    "OLD FILE KEPT:",
+                                    movie_id
+                                )
+                                continue
+
+                            # Radarr can finish/register a ManualImport while
+                            # leaving the command stuck at "started". Warcraft
+                            # proved that command state alone is not authoritative.
+                            #
+                            # Explicit failure/abort remains a hard failure.
+                            # Otherwise verify the REAL registered movie file
+                            # below. Only verified replacement state may trigger
+                            # cleanup of the exact recorded old_file_id.
+                            if (
+                                command_status == "completed"
+                                and command_result not in (
+                                    "successful",
+                                    "success"
+                                )
+                            ):
+                                txn["status"] = "failed"
+                                changed = True
+                                print(
+                                    "[radarr-import] unsuccessful import; "
+                                    "OLD FILE KEPT:",
+                                    movie_id
+                                )
+                                continue
+
+                            # Do not trust movie.movieFile here. Radarr can
+                            # temporarily have both old and new files registered.
+                            # Identify the replacement from ALL registered files
+                            # using the exact expected downloaded size.
+                            files = radarr_get(
+                                "/moviefile?movieId=%d" % movie_id
+                            )
+
+                            expected_size = int(
+                                txn.get("actual_download_size")
+                                or txn.get("approved_size")
+                                or 0
+                            )
+
+                            replacements = [
+                                f for f in files
+                                if int(f.get("id") or 0) != old_file_id
+                                and int(f.get("size") or 0) > 0
+                                and int(f.get("size") or 0) < old_size
+                                and (
+                                    not expected_size
+                                    or int(f.get("size") or 0)
+                                    == expected_size
+                                )
+                            ]
+
+                            if len(replacements) != 1:
+                                print(
+                                    "[radarr-import] replacement verification "
+                                    "waiting; candidate count:",
+                                    len(replacements),
+                                    "movie:",
+                                    movie_id
+                                )
+                                continue
+
+                            current = replacements[0]
+                            new_file_id = int(current.get("id") or 0)
+                            new_size = int(current.get("size") or 0)
+
+                            if (
+                                not new_file_id
+                                or not new_size
+                                or new_size >= old_size
+                            ):
+                                txn["status"] = "failed"
+                                changed = True
+                                print(
+                                    "[radarr-import] imported file failed "
+                                    "final size check; OLD FILE KEPT:",
+                                    movie_id
+                                )
+                                continue
+
+                            old_exists = any(
+                                int(f.get("id") or 0) == old_file_id
+                                for f in files
+                            )
+
+                            new_exists = any(
+                                int(f.get("id") or 0) == new_file_id
+                                for f in files
+                            )
+
+                            if not new_exists:
+                                continue
+
+                            if old_exists:
+                                radarr_request(
+                                    "/moviefile/%d" % old_file_id,
+                                    method="DELETE"
+                                )
+
+                            files = radarr_get(
+                                "/moviefile?movieId=%d" % movie_id
+                            )
+
+                            if any(
+                                int(f.get("id") or 0) == old_file_id
+                                for f in files
+                            ):
+                                print(
+                                    "[radarr-import] old file still exists:",
+                                    movie_id
+                                )
+                                continue
+
+                            print(
+                                "[radarr-import] SUCCESS:",
+                                movie_id,
+                                "%.2f GiB -> %.2f GiB"
+                                % (
+                                    old_size / 1073741824,
+                                    new_size / 1073741824
+                                )
+                            )
+
+                            pending.pop(movie_key, None)
+                            changed = True
+
+                    except Exception as exc:
+                        print(
+                            "[radarr-import] transaction error %s: %s"
+                            % (movie_key, exc)
+                        )
+
+                if changed:
+                    state["pending_replacements"] = pending
+                    save_radarr_state(state)
+
+                # Dead-download retries are deliberately launched only on a
+                # later worker cycle, after removal state has been persisted.
+                retry_jobs = [
+                    (key, txn)
+                    for key, txn in pending.items()
+                    if str(txn.get("status") or "")
+                    == "dead_removed_retry_pending"
+                ]
+
+                for retry_key, retry_txn in retry_jobs:
+                    movie_id = int(
+                        retry_txn.get("movie_id") or retry_key
+                    )
+                    old_file_id = int(
+                        retry_txn.get("old_file_id") or 0
+                    )
+                    old_size = int(
+                        retry_txn.get("old_size") or 0
+                    )
+                    retry_count = int(
+                        retry_txn.get("dead_retry_count") or 0
+                    )
+
+                    if retry_count <= 0 or retry_count >= 3:
+                        continue
+
+                    # The failed queue/hash must already be gone.
+                    failed_download_id = str(
+                        retry_txn.get("failed_download_id") or ""
+                    ).strip().upper()
+
+                    if not failed_download_id:
+                        continue
+
+                    if any(
+                        str(
+                            row.get("downloadId") or ""
+                        ).strip().upper() == failed_download_id
+                        for row in queue_records()
+                    ):
+                        continue
+
+                    # Original movie file remains our safety anchor.
+                    files = radarr_get(
+                        "/moviefile?movieId=%d" % movie_id
+                    )
+
+                    old_file = next(
+                        (
+                            f for f in files
+                            if int(f.get("id") or 0)
+                            == old_file_id
+                        ),
+                        None
+                    )
+
+                    if (
+                        not old_file
+                        or int(old_file.get("size") or 0)
+                        != old_size
+                    ):
+                        print(
+                            "[radarr-fallback] retry refused; "
+                            "original file changed:",
+                            movie_id
+                        )
+                        continue
+
+                    started = run_optimizer(
+                        True,
+                        app="radarr",
+                        searches_per_run=None,
+                        target_movie_id=movie_id
+                    )
+
+                    if started:
+                        print(
+                            "[radarr-fallback] targeted retry launched:",
+                            movie_id,
+                            "attempt",
+                            retry_count + 1
+                        )
+                        break
+
+        except Exception as exc:
+            print("[radarr-import] worker error:", exc)
+
+        time.sleep(15)
 
 
 def completed_upgrades(records):
@@ -734,26 +1798,61 @@ def manual_status(app):
     if not snap.get("running") and not display_item:
         display_item = str(snap.get("last") or display_item)
     return {"state": state, "searched": display_searched if snap.get("started") else searched,
+            "grabbed": display_searched,
             "requested": requested, "running": bool(snap.get("running")), "detail": detail,
             "current": str(snap.get("current") or "") if snap.get("running") else "",
-            "last": display_item}
+            "last": display_item,
+            "started": snap.get("started"),
+            "finished": snap.get("finished"),
+            "returncode": snap.get("returncode")}
 
-def run_optimizer(live, app="radarr", searches_per_run=None, daily_extra=0):
+def run_optimizer(
+    live,
+    app="radarr",
+    searches_per_run=None,
+    daily_extra=0,
+    target_movie_id=None,
+    target_series_id=None,
+    manual_target=False
+):
     with job_lock:
         other = "sonarr" if app == "radarr" else "radarr"
         if jobs[app]["running"] or jobs[other]["running"]: return False
         start = search_count(app)
         if daily_extra: add_daily_extra(app, daily_extra)
-        jobs[app].update(running=True, requested=int(searches_per_run or 0), start=start, proc=None, stopped=False, started=time.time(), finished=None, output="", current="", last="", display_searched=0, display_item="", returncode=None)
+        requested = (
+            1
+            if target_movie_id or target_series_id
+            else int(searches_per_run or 0)
+        )
+        jobs[app].update(running=True, requested=requested, start=start, proc=None, stopped=False, started=time.time(), finished=None, output="", current="", last="", display_searched=0, display_item="", returncode=None)
     def worker():
         script = OPTIMIZER if app == "radarr" else SONARR_OPTIMIZER
         cmd = ["python3", "-u", script] + (["--live"] if live else [])
-        env = os.environ.copy(); env["SMART_OPTIMIZER_CONTROL"] = CONTROL_FILE
+        env = os.environ.copy()
+        if manual_target:
+            env["SMART_OPTIMIZER_MANUAL_TARGET"] = "1"
+        env["SMART_OPTIMIZER_CONTROL"] = CONTROL_FILE
         rcfg, scfg = connection("radarr"), connection("sonarr")
         env["RADARR_URL"] = connection_url("radarr"); env["RADARR_KEY"] = rcfg["api_key"]
         env["SONARR_URL"] = connection_url("sonarr"); env["SONARR_KEY"] = scfg["api_key"]
         env["RADARR_DAILY_SEARCH_BUDGET"] = str(daily_search_budget("radarr"))
         env["SONARR_DAILY_SEARCH_BUDGET"] = str(daily_search_budget("sonarr"))
+
+        if app == "radarr" and target_movie_id:
+            env["SMART_OPTIMIZER_MOVIE_ID"] = str(
+                int(target_movie_id)
+            )
+            env["SMART_OPTIMIZER_TARGET_GRABS"] = "1"
+            env["RADARR_SEARCHES_PER_RUN"] = "1"
+
+        if app == "sonarr" and target_series_id:
+            env["SMART_OPTIMIZER_SERIES_ID"] = str(
+                int(target_series_id)
+            )
+            env["SMART_OPTIMIZER_TARGET_GRABS"] = "1"
+            env["SONARR_SEARCHES_PER_RUN"] = "100"
+
         if searches_per_run:
             # Manual number = successful upgrades wanted.
             env["SMART_OPTIMIZER_TARGET_GRABS"] = str(searches_per_run)
@@ -1089,6 +2188,48 @@ AJAX_SCRIPT = """<script>
 })();
 </script>"""
 
+CSS += r"""
+.searchmodebtn.active{
+  border-color:rgba(255,255,255,.28);
+  background:rgba(255,255,255,.11);
+  box-shadow:0 0 0 1px rgba(255,255,255,.04) inset;
+}
+.manualOptimizeButton{
+  min-width:92px;
+}
+.manualOptimizeButton:disabled{
+  opacity:.55;
+  cursor:wait;
+}
+.manualOptimizerToast{
+  position:fixed;
+  right:24px;
+  bottom:24px;
+  z-index:9999;
+  max-width:min(420px,calc(100vw - 48px));
+  padding:14px 18px;
+  border-radius:12px;
+  background:#171b22;
+  border:1px solid rgba(255,255,255,.14);
+  box-shadow:0 12px 40px rgba(0,0,0,.38);
+  opacity:0;
+  transform:translateY(12px);
+  pointer-events:none;
+  transition:opacity .18s ease,transform .18s ease;
+  font-weight:600;
+}
+.manualOptimizerToast.visible{
+  opacity:1;
+  transform:translateY(0);
+}
+.manualOptimizerToast.success{
+  border-color:rgba(80,210,140,.45);
+}
+.manualOptimizerToast.error{
+  border-color:rgba(255,100,100,.5);
+}
+"""
+
 def page():
     state = load_state()
     today = time.strftime("%Y-%m-%d")
@@ -1208,8 +2349,13 @@ let queueOpen=false;
 function toggleQueue(){const b=document.getElementById('queueExpand');if(queueOpen){location.href='/radarr/history';return;}queueOpen=true;document.querySelectorAll('.queueitem.extra').forEach(el=>el.style.display='block');if(b)b.textContent='History →';}
 let changesOpen=false;function toggleChanges(){const b=document.getElementById('changesExpand');if(changesOpen){location.href='/radarr/history';return;}changesOpen=true;document.querySelectorAll('.changeextra').forEach(el=>el.style.display='table-row');if(b)b.textContent='History →';}
 const box=document.getElementById('librarySearch');
-const modeButton=document.getElementById('searchModeToggle');
-const exclusionResults=document.getElementById('exclusionSearchResults');
+const modeButtons=Array.from(
+  document.querySelectorAll('[data-search-mode]')
+);
+const exclusionModeButton=
+  document.getElementById('exclusionModeButton');
+const exclusionResults=
+  document.getElementById('exclusionSearchResults');
 
 const SEARCH_APP=
   location.pathname.indexOf('/sonarr')===0
@@ -1217,8 +2363,6 @@ const SEARCH_APP=
     : 'radarr';
 
 let searchMode='current';
-const originalModeButtonHTML=
-  modeButton ? modeButton.innerHTML : '⊘ Exclusions';
 let exclusionTimer=null;
 
 const recentExclusions=document.getElementById('recentExclusions');
@@ -1230,8 +2374,8 @@ if(showAllExclusions){
 }
 
 function updateExclusionButtonCount(count){
-  const span=modeButton
-    ? modeButton.querySelector('span')
+  const span=exclusionModeButton
+    ? exclusionModeButton.querySelector('span')
     : null;
 
   if(span){
@@ -1494,55 +2638,369 @@ function searchExclusionLibrary(){
   },150);
 }
 
+function escapeSearchHTML(value){
+  return String(value==null ? '' : value)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
+function showOptimizerToast(message,kind){
+  let toast=document.getElementById('manualOptimizerToast');
+
+  if(!toast){
+    toast=document.createElement('div');
+    toast.id='manualOptimizerToast';
+    toast.className='manualOptimizerToast';
+    document.body.appendChild(toast);
+  }
+
+  toast.className=
+    'manualOptimizerToast visible '+(kind||'');
+  toast.textContent=message;
+
+  clearTimeout(window.manualOptimizerToastTimer);
+
+  window.manualOptimizerToastTimer=setTimeout(()=>{
+    toast.classList.remove('visible');
+  },5000);
+}
+
+function searchManualLibrary(){
+  clearTimeout(exclusionTimer);
+
+  const q=box.value.trim();
+
+  if(!q){
+    exclusionResults.innerHTML='';
+    return;
+  }
+
+  exclusionResults.innerHTML=
+    '<div class="exsearchstatus">Searching cached library…</div>';
+
+  exclusionTimer=setTimeout(async()=>{
+    try{
+      const response=await fetch(
+        '/library-search?app='+
+        encodeURIComponent(SEARCH_APP)+
+        '&q='+
+        encodeURIComponent(q),
+        {cache:'no-store'}
+      );
+
+      if(!response.ok){
+        throw new Error('HTTP '+response.status);
+      }
+
+      const data=await response.json();
+
+      if(!Array.isArray(data) || !data.length){
+        exclusionResults.innerHTML=
+          '<div class="exsearchstatus">No library matches.</div>';
+        return;
+      }
+
+      exclusionResults.innerHTML=data.map(x=>{
+        const title=escapeSearchHTML(x.title||'Untitled');
+        const year=x.year
+          ? ' <span class="muted">('+
+            escapeSearchHTML(x.year)+
+            ')</span>'
+          : '';
+
+        if(x.excluded){
+          return (
+            '<div class="exclusionsearchrow">'+
+              '<div class="exclusiontitle">'+
+                title+year+
+              '</div>'+
+              '<span class="badge">EXCLUDED</span>'+
+            '</div>'
+          );
+        }
+
+        return (
+          '<div class="exclusionsearchrow">'+
+            '<div class="exclusiontitle">'+
+              title+year+
+            '</div>'+
+            '<button type="button" class="manualOptimizeButton" '+
+              'data-id="'+Number(x.id)+'" '+
+              'data-title="'+
+                escapeSearchHTML(x.title||'Untitled')+
+              '">Optimize</button>'+
+          '</div>'
+        );
+      }).join('');
+    }catch(err){
+      console.error('Manual library search failed:',err);
+      exclusionResults.innerHTML=
+        '<div class="exsearchstatus">Could not search library.</div>';
+    }
+  },150);
+}
+
+async function waitForManualOptimizer(id,title,button,jobStarted){
+  const clickedAt=Date.now();
+  let searchingShown=false;
+
+  for(let attempt=0;attempt<600;attempt++){
+    await new Promise(resolve=>setTimeout(resolve,1000));
+
+    if(!searchingShown && Date.now()-clickedAt>=3000){
+      searchingShown=true;
+
+      if(button){
+        button.textContent='Searching…';
+      }
+    }
+
+    try{
+      const response=await fetch(
+        '/status?app='+encodeURIComponent(SEARCH_APP),
+        {cache:'no-store'}
+      );
+
+      if(!response.ok){
+        continue;
+      }
+
+      const status=await response.json();
+      const statusStarted=Number(status.started || 0);
+
+      if(
+        jobStarted &&
+        statusStarted &&
+        statusStarted < jobStarted
+      ){
+        continue;
+      }
+
+      if(status.running){
+        continue;
+      }
+
+      if(!status.finished){
+        continue;
+      }
+
+      const grabbed=Number(status.grabbed || 0);
+
+      if(status.state==='failed'){
+        if(button){
+          button.textContent='Failed';
+        }
+
+        showOptimizerToast(
+          'Optimizer failed for '+title+'.',
+          'error'
+        );
+
+      }else if(status.state==='stopped'){
+        if(button){
+          button.textContent='Stopped';
+        }
+
+        showOptimizerToast(
+          'Optimizer stopped for '+title+'.',
+          'error'
+        );
+
+      }else if(grabbed>0){
+        if(button){
+          button.textContent='Downloading';
+        }
+
+        showOptimizerToast(
+          'Downloading upgrade for '+title+'.',
+          'success'
+        );
+
+      }else{
+        if(button){
+          button.textContent='No Upgrade';
+
+          setTimeout(()=>{
+            const currentButton=Array.from(
+              document.querySelectorAll('.manualOptimizeButton')
+            ).find(candidate=>
+              Number(candidate.dataset.id)===Number(id)
+            );
+
+            if(currentButton){
+              currentButton.textContent='Optimize';
+              currentButton.disabled=false;
+            }
+          },5000);
+        }
+
+        showOptimizerToast(
+          'No upgrade found for '+title+'.',
+          'neutral'
+        );
+      }
+
+      return;
+    }catch(err){
+      console.error(
+        'Manual optimizer status failed:',
+        err
+      );
+    }
+  }
+
+  if(button){
+    button.textContent='Searching…';
+  }
+
+  showOptimizerToast(
+    'Optimizer is still running for '+title+'.',
+    'neutral'
+  );
+}
+
+async function startManualOptimizer(id,title,button){
+  if(button){
+    button.disabled=true;
+    button.textContent='Starting…';
+  }
+
+  const body=new URLSearchParams();
+  body.set('app',SEARCH_APP);
+  body.set('id',String(id));
+
+  try{
+    const response=await fetch(
+      '/manual-optimize',
+      {
+        method:'POST',
+        headers:{
+          'Content-Type':
+            'application/x-www-form-urlencoded;charset=UTF-8',
+          'X-Requested-With':'fetch'
+        },
+        body:body.toString(),
+        cache:'no-store'
+      }
+    );
+
+    if(!response.ok){
+      let message='Could not start optimizer.';
+
+      if(response.status===409){
+        message=
+          'Optimizer is already running, or this item is excluded.';
+      }
+
+      throw new Error(message);
+    }
+
+    const result=await response.json();
+
+    showOptimizerToast(
+      'Optimizing '+title+'…',
+      'running'
+    );
+
+    await waitForManualOptimizer(
+      id,
+      title,
+      button,
+      Number(result.started || 0)
+    );
+
+  }catch(err){
+    showOptimizerToast(
+      err.message || 'Could not start optimizer.',
+      'error'
+    );
+
+    if(button){
+      button.disabled=false;
+      button.textContent='Optimize';
+    }
+  }
+}
+
+exclusionResults.addEventListener('click',event=>{
+  const button=
+    event.target.closest('.manualOptimizeButton');
+
+  if(!button){
+    return;
+  }
+
+  startManualOptimizer(
+    Number(button.dataset.id),
+    button.dataset.title || 'Selected item',
+    button
+  );
+});
+
+function setSearchMode(mode){
+  searchMode=mode;
+
+  box.value='';
+  exclusionResults.innerHTML='';
+
+  modeButtons.forEach(button=>{
+    button.classList.toggle(
+      'active',
+      button.dataset.searchMode===mode
+    );
+  });
+
+  restoreDashboardRows();
+
+  if(recentExclusions){
+    recentExclusions.classList.toggle(
+      'visible',
+      mode==='exclude'
+    );
+  }
+
+  if(mode==='exclude'){
+    box.placeholder=
+      SEARCH_APP==='radarr'
+        ? 'Search movies in Radarr library to exclude…'
+        : 'Search series in Sonarr library to exclude…';
+
+    loadRecentExclusions();
+
+  }else if(mode==='manual'){
+    box.placeholder=
+      SEARCH_APP==='radarr'
+        ? 'Search a movie to optimize…'
+        : 'Search a series to optimize…';
+
+  }else{
+    box.placeholder=
+      'Search releases and current downloads…';
+  }
+
+  box.focus();
+}
+
 box.addEventListener('input',()=>{
   if(searchMode==='exclude'){
     searchExclusionLibrary();
+  }else if(searchMode==='manual'){
+    searchManualLibrary();
   }else{
     filterCurrentDownloads();
   }
 });
 
-if(modeButton){
-  modeButton.addEventListener('click',()=>{
-    box.value='';
-    exclusionResults.innerHTML='';
-
-    if(searchMode==='current'){
-      searchMode='exclude';
-
-      modeButton.innerHTML='↩ Current downloads';
-
-      box.placeholder=
-        SEARCH_APP==='radarr'
-          ? 'Search movies in Radarr library to exclude…'
-          : 'Search series in Sonarr library to exclude…';
-
-      restoreDashboardRows();
-
-      if(recentExclusions){
-        recentExclusions.classList.add('visible');
-      }
-
-      loadRecentExclusions();
-
-    }else{
-      searchMode='current';
-
-      modeButton.innerHTML=originalModeButtonHTML;
-
-      box.placeholder=
-        'Search releases and current downloads…';
-
-      restoreDashboardRows();
-
-      if(recentExclusions){
-        recentExclusions.classList.remove('visible');
-      }
-    }
-
-    box.focus();
+modeButtons.forEach(button=>{
+  button.addEventListener('click',()=>{
+    setSearchMode(button.dataset.searchMode);
   });
-}
+});
+
+setSearchMode('current');
 </script><script>
 (function(){var el=document.querySelector('[id^="runstate-"]');if(!el)return;var app=el.id.replace('runstate-','');async function tick(){try{var r=await fetch('/status?app='+app,{cache:'no-store'});var x=await r.json();el.textContent=x.requested?(x.state.charAt(0).toUpperCase()+x.state.slice(1)+' · '+x.searched+' / '+x.requested+' upgrades'):'Idle';}catch(e){}}tick();setInterval(tick,10000);})();
 </script>%s</body></html>""" % (
@@ -1715,8 +3173,13 @@ def sonarr_page():
 let queueOpen=false;function toggleQueue(){const b=document.getElementById('queueExpand');if(queueOpen){location.href='/sonarr/history';return;}queueOpen=true;document.querySelectorAll('.queueitem.extra').forEach(el=>el.style.display='block');if(b)b.textContent='History →';}
 let changesOpen=false;function toggleChanges(){const b=document.getElementById('changesExpand');if(changesOpen){location.href='/sonarr/history';return;}changesOpen=true;document.querySelectorAll('.changeextra').forEach(el=>el.style.display='table-row');if(b)b.textContent='History →';}
 const box=document.getElementById('librarySearch');
-const modeButton=document.getElementById('searchModeToggle');
-const exclusionResults=document.getElementById('exclusionSearchResults');
+const modeButtons=Array.from(
+  document.querySelectorAll('[data-search-mode]')
+);
+const exclusionModeButton=
+  document.getElementById('exclusionModeButton');
+const exclusionResults=
+  document.getElementById('exclusionSearchResults');
 
 const SEARCH_APP=
   location.pathname.indexOf('/sonarr')===0
@@ -1724,8 +3187,6 @@ const SEARCH_APP=
     : 'radarr';
 
 let searchMode='current';
-const originalModeButtonHTML=
-  modeButton ? modeButton.innerHTML : '⊘ Exclusions';
 let exclusionTimer=null;
 
 const recentExclusions=document.getElementById('recentExclusions');
@@ -1737,8 +3198,8 @@ if(showAllExclusions){
 }
 
 function updateExclusionButtonCount(count){
-  const span=modeButton
-    ? modeButton.querySelector('span')
+  const span=exclusionModeButton
+    ? exclusionModeButton.querySelector('span')
     : null;
 
   if(span){
@@ -2001,55 +3462,369 @@ function searchExclusionLibrary(){
   },150);
 }
 
+function escapeSearchHTML(value){
+  return String(value==null ? '' : value)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
+function showOptimizerToast(message,kind){
+  let toast=document.getElementById('manualOptimizerToast');
+
+  if(!toast){
+    toast=document.createElement('div');
+    toast.id='manualOptimizerToast';
+    toast.className='manualOptimizerToast';
+    document.body.appendChild(toast);
+  }
+
+  toast.className=
+    'manualOptimizerToast visible '+(kind||'');
+  toast.textContent=message;
+
+  clearTimeout(window.manualOptimizerToastTimer);
+
+  window.manualOptimizerToastTimer=setTimeout(()=>{
+    toast.classList.remove('visible');
+  },5000);
+}
+
+function searchManualLibrary(){
+  clearTimeout(exclusionTimer);
+
+  const q=box.value.trim();
+
+  if(!q){
+    exclusionResults.innerHTML='';
+    return;
+  }
+
+  exclusionResults.innerHTML=
+    '<div class="exsearchstatus">Searching cached library…</div>';
+
+  exclusionTimer=setTimeout(async()=>{
+    try{
+      const response=await fetch(
+        '/library-search?app='+
+        encodeURIComponent(SEARCH_APP)+
+        '&q='+
+        encodeURIComponent(q),
+        {cache:'no-store'}
+      );
+
+      if(!response.ok){
+        throw new Error('HTTP '+response.status);
+      }
+
+      const data=await response.json();
+
+      if(!Array.isArray(data) || !data.length){
+        exclusionResults.innerHTML=
+          '<div class="exsearchstatus">No library matches.</div>';
+        return;
+      }
+
+      exclusionResults.innerHTML=data.map(x=>{
+        const title=escapeSearchHTML(x.title||'Untitled');
+        const year=x.year
+          ? ' <span class="muted">('+
+            escapeSearchHTML(x.year)+
+            ')</span>'
+          : '';
+
+        if(x.excluded){
+          return (
+            '<div class="exclusionsearchrow">'+
+              '<div class="exclusiontitle">'+
+                title+year+
+              '</div>'+
+              '<span class="badge">EXCLUDED</span>'+
+            '</div>'
+          );
+        }
+
+        return (
+          '<div class="exclusionsearchrow">'+
+            '<div class="exclusiontitle">'+
+              title+year+
+            '</div>'+
+            '<button type="button" class="manualOptimizeButton" '+
+              'data-id="'+Number(x.id)+'" '+
+              'data-title="'+
+                escapeSearchHTML(x.title||'Untitled')+
+              '">Optimize</button>'+
+          '</div>'
+        );
+      }).join('');
+    }catch(err){
+      console.error('Manual library search failed:',err);
+      exclusionResults.innerHTML=
+        '<div class="exsearchstatus">Could not search library.</div>';
+    }
+  },150);
+}
+
+async function waitForManualOptimizer(id,title,button,jobStarted){
+  const clickedAt=Date.now();
+  let searchingShown=false;
+
+  for(let attempt=0;attempt<600;attempt++){
+    await new Promise(resolve=>setTimeout(resolve,1000));
+
+    if(!searchingShown && Date.now()-clickedAt>=3000){
+      searchingShown=true;
+
+      if(button){
+        button.textContent='Searching…';
+      }
+    }
+
+    try{
+      const response=await fetch(
+        '/status?app='+encodeURIComponent(SEARCH_APP),
+        {cache:'no-store'}
+      );
+
+      if(!response.ok){
+        continue;
+      }
+
+      const status=await response.json();
+      const statusStarted=Number(status.started || 0);
+
+      if(
+        jobStarted &&
+        statusStarted &&
+        statusStarted < jobStarted
+      ){
+        continue;
+      }
+
+      if(status.running){
+        continue;
+      }
+
+      if(!status.finished){
+        continue;
+      }
+
+      const grabbed=Number(status.grabbed || 0);
+
+      if(status.state==='failed'){
+        if(button){
+          button.textContent='Failed';
+        }
+
+        showOptimizerToast(
+          'Optimizer failed for '+title+'.',
+          'error'
+        );
+
+      }else if(status.state==='stopped'){
+        if(button){
+          button.textContent='Stopped';
+        }
+
+        showOptimizerToast(
+          'Optimizer stopped for '+title+'.',
+          'error'
+        );
+
+      }else if(grabbed>0){
+        if(button){
+          button.textContent='Downloading';
+        }
+
+        showOptimizerToast(
+          'Downloading upgrade for '+title+'.',
+          'success'
+        );
+
+      }else{
+        if(button){
+          button.textContent='No Upgrade';
+
+          setTimeout(()=>{
+            const currentButton=Array.from(
+              document.querySelectorAll('.manualOptimizeButton')
+            ).find(candidate=>
+              Number(candidate.dataset.id)===Number(id)
+            );
+
+            if(currentButton){
+              currentButton.textContent='Optimize';
+              currentButton.disabled=false;
+            }
+          },5000);
+        }
+
+        showOptimizerToast(
+          'No upgrade found for '+title+'.',
+          'neutral'
+        );
+      }
+
+      return;
+    }catch(err){
+      console.error(
+        'Manual optimizer status failed:',
+        err
+      );
+    }
+  }
+
+  if(button){
+    button.textContent='Searching…';
+  }
+
+  showOptimizerToast(
+    'Optimizer is still running for '+title+'.',
+    'neutral'
+  );
+}
+
+async function startManualOptimizer(id,title,button){
+  if(button){
+    button.disabled=true;
+    button.textContent='Starting…';
+  }
+
+  const body=new URLSearchParams();
+  body.set('app',SEARCH_APP);
+  body.set('id',String(id));
+
+  try{
+    const response=await fetch(
+      '/manual-optimize',
+      {
+        method:'POST',
+        headers:{
+          'Content-Type':
+            'application/x-www-form-urlencoded;charset=UTF-8',
+          'X-Requested-With':'fetch'
+        },
+        body:body.toString(),
+        cache:'no-store'
+      }
+    );
+
+    if(!response.ok){
+      let message='Could not start optimizer.';
+
+      if(response.status===409){
+        message=
+          'Optimizer is already running, or this item is excluded.';
+      }
+
+      throw new Error(message);
+    }
+
+    const result=await response.json();
+
+    showOptimizerToast(
+      'Optimizing '+title+'…',
+      'running'
+    );
+
+    await waitForManualOptimizer(
+      id,
+      title,
+      button,
+      Number(result.started || 0)
+    );
+
+  }catch(err){
+    showOptimizerToast(
+      err.message || 'Could not start optimizer.',
+      'error'
+    );
+
+    if(button){
+      button.disabled=false;
+      button.textContent='Optimize';
+    }
+  }
+}
+
+exclusionResults.addEventListener('click',event=>{
+  const button=
+    event.target.closest('.manualOptimizeButton');
+
+  if(!button){
+    return;
+  }
+
+  startManualOptimizer(
+    Number(button.dataset.id),
+    button.dataset.title || 'Selected item',
+    button
+  );
+});
+
+function setSearchMode(mode){
+  searchMode=mode;
+
+  box.value='';
+  exclusionResults.innerHTML='';
+
+  modeButtons.forEach(button=>{
+    button.classList.toggle(
+      'active',
+      button.dataset.searchMode===mode
+    );
+  });
+
+  restoreDashboardRows();
+
+  if(recentExclusions){
+    recentExclusions.classList.toggle(
+      'visible',
+      mode==='exclude'
+    );
+  }
+
+  if(mode==='exclude'){
+    box.placeholder=
+      SEARCH_APP==='radarr'
+        ? 'Search movies in Radarr library to exclude…'
+        : 'Search series in Sonarr library to exclude…';
+
+    loadRecentExclusions();
+
+  }else if(mode==='manual'){
+    box.placeholder=
+      SEARCH_APP==='radarr'
+        ? 'Search a movie to optimize…'
+        : 'Search a series to optimize…';
+
+  }else{
+    box.placeholder=
+      'Search releases and current downloads…';
+  }
+
+  box.focus();
+}
+
 box.addEventListener('input',()=>{
   if(searchMode==='exclude'){
     searchExclusionLibrary();
+  }else if(searchMode==='manual'){
+    searchManualLibrary();
   }else{
     filterCurrentDownloads();
   }
 });
 
-if(modeButton){
-  modeButton.addEventListener('click',()=>{
-    box.value='';
-    exclusionResults.innerHTML='';
-
-    if(searchMode==='current'){
-      searchMode='exclude';
-
-      modeButton.innerHTML='↩ Current downloads';
-
-      box.placeholder=
-        SEARCH_APP==='radarr'
-          ? 'Search movies in Radarr library to exclude…'
-          : 'Search series in Sonarr library to exclude…';
-
-      restoreDashboardRows();
-
-      if(recentExclusions){
-        recentExclusions.classList.add('visible');
-      }
-
-      loadRecentExclusions();
-
-    }else{
-      searchMode='current';
-
-      modeButton.innerHTML=originalModeButtonHTML;
-
-      box.placeholder=
-        'Search releases and current downloads…';
-
-      restoreDashboardRows();
-
-      if(recentExclusions){
-        recentExclusions.classList.remove('visible');
-      }
-    }
-
-    box.focus();
+modeButtons.forEach(button=>{
+  button.addEventListener('click',()=>{
+    setSearchMode(button.dataset.searchMode);
   });
-}
+});
+
+setSearchMode('current');
 </script>
 %s
 </body></html>""" % (
@@ -2302,6 +4077,84 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        if self.path == "/manual-optimize":
+            if not ENABLE_ACTIONS:
+                self.send_error(403)
+                return
+
+            app = (form.get("app") or [""])[0]
+
+            if app not in ("radarr", "sonarr"):
+                self.send_error(400, "Invalid app")
+                return
+
+            try:
+                item_id = int((form.get("id") or [""])[0])
+            except (TypeError, ValueError):
+                self.send_error(400, "Invalid library item")
+                return
+
+            item = next(
+                (
+                    x for x in library_items(app)
+                    if int(x.get("id") or 0) == item_id
+                ),
+                None
+            )
+
+            if not item:
+                self.send_error(404, "Library item not found")
+                return
+
+            if item.get("excluded"):
+                self.send_error(
+                    409,
+                    "Remove this item from Exclusions before optimizing it."
+                )
+                return
+
+            if app == "radarr":
+                started = run_optimizer(
+                    True,
+                    app="radarr",
+                    target_movie_id=item_id,
+                    manual_target=True
+                )
+            else:
+                started = run_optimizer(
+                    True,
+                    app="sonarr",
+                    target_series_id=item_id,
+                    manual_target=True
+                )
+
+            if not started:
+                self.send_error(
+                    409,
+                    "Another optimizer job is already running."
+                )
+                return
+
+            with job_lock:
+                job_started = jobs[app].get("started")
+
+            body = json.dumps({
+                "ok": True,
+                "app": app,
+                "id": item_id,
+                "title": item.get("title") or "",
+                "year": item.get("year"),
+                "started": job_started
+            }).encode("utf-8")
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/manual-search":
             if not ENABLE_ACTIONS: self.send_error(403); return
             app = (form.get("app") or [""])[0]
@@ -2347,5 +4200,16 @@ if __name__ == "__main__":
     print("Actions:", "ENABLED" if ENABLE_ACTIONS else "disabled (read-only)")
     if HOST not in ("127.0.0.1", "localhost", "::1"):
         print("WARNING: UI has no built-in authentication; expose only on a trusted LAN/reverse proxy.")
-    threading.Thread(target=library_cache_worker, daemon=True).start()
+    threading.Thread(
+        target=library_cache_worker,
+        name="library-cache",
+        daemon=True
+    ).start()
+
+    threading.Thread(
+        target=optimizer_import_worker,
+        name="radarr-optimizer-import",
+        daemon=True
+    ).start()
+
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

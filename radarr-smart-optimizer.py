@@ -180,6 +180,47 @@ def post(path, data):
     return api("POST", path, data)
 
 
+def bind_grabbed_download(movie_id, approved_release, attempts=15, delay=1.0):
+    """Return exact Radarr queue ownership for a release we just grabbed."""
+    expected_hash = release_infohash(approved_release)
+
+    for _ in range(attempts):
+        try:
+            data = get(
+                "/queue?page=1&pageSize=100"
+                "&includeUnknownMovieItems=true"
+            ) or {}
+
+            rows = [
+                r for r in (data.get("records") or [])
+                if int(r.get("movieId") or 0) == int(movie_id)
+            ]
+
+            if expected_hash:
+                rows = [
+                    r for r in rows
+                    if str(r.get("downloadId") or "").strip().upper()
+                    == expected_hash.upper()
+                ]
+
+            if len(rows) == 1:
+                row = rows[0]
+                download_id = str(row.get("downloadId") or "").strip()
+
+                if download_id:
+                    return {
+                        "download_id": download_id,
+                        "queue_id": int(row.get("id") or 0)
+                    }
+
+        except Exception:
+            pass
+
+        time.sleep(delay)
+
+    return None
+
+
 # ============================================================
 # STATE
 # ============================================================
@@ -193,7 +234,8 @@ def blank_state():
         "movie_queue": [],
         "movie_cursor": 0,
         "known_movie_ids": [],
-        "queue_initialized": False
+        "queue_initialized": False,
+        "pending_replacements": {}
     }
 
 
@@ -213,6 +255,7 @@ def load_state():
         state.setdefault("movie_cursor", 0)
         state.setdefault("known_movie_ids", [])
         state.setdefault("queue_initialized", False)
+        state.setdefault("pending_replacements", {})
 
         return state
 
@@ -272,7 +315,38 @@ def mark_movie_searched(state, movie_id):
     entry["search_cycles"] = min(2, int(entry.get("search_cycles", 0)) + 1)
 
 
+def release_infohash(release):
+    """Return canonical BTIH when Prowlarr exposes one directly or in a magnet."""
+    for field in (
+        "downloadId",
+        "torrentInfoHash",
+        "infoHash",
+        "guid",
+        "downloadUrl",
+        "magnetUrl"
+    ):
+        value = str(release.get(field) or "").strip()
+
+        if not value:
+            continue
+
+        match = re.search(
+            r"(?:btih:)?([A-Fa-f0-9]{40})(?:[^A-Fa-f0-9]|$)",
+            value
+        )
+
+        if match:
+            return match.group(1).upper()
+
+    return None
+
+
 def release_key(release):
+    infohash = release_infohash(release)
+
+    if infohash:
+        return "btih:" + infohash
+
     for field in (
         "guid",
         "downloadUrl",
@@ -288,13 +362,28 @@ def release_key(release):
 
 def release_recently_attempted(state, release):
     key = release_key(release)
+    attempts = state.get("attempted_releases", {})
 
-    ts = state.get("attempted_releases", {}).get(key)
+    ts = attempts.get(key)
 
-    if not ts:
-        return False
+    if ts and age_days(ts) < ATTEMPT_COOLDOWN_DAYS:
+        return True
 
-    return age_days(ts) < ATTEMPT_COOLDOWN_DAYS
+    # Backward compatibility: older state entries used URL/magnet keys.
+    # If this release has a BTIH, also detect that hash inside old keys.
+    infohash = release_infohash(release)
+
+    if infohash:
+        needle = infohash.lower()
+
+        for old_key, old_ts in attempts.items():
+            if (
+                needle in str(old_key).lower()
+                and age_days(old_ts) < ATTEMPT_COOLDOWN_DAYS
+            ):
+                return True
+
+    return False
 
 
 def mark_release_attempted(state, release):
@@ -690,6 +779,11 @@ def movie_item(movie, state, queued_ids):
     if size_bytes <= 0:
         return None
 
+    # Do not spend searches/downloads optimizing already-small movies.
+    # 5 GiB is based on the CURRENT file, not the replacement candidate.
+    if size_bytes < 5 * 1024 ** 3:
+        return None
+
     resolution = file_resolution(movie_file)
     if resolution not in (1080, 2160):
         return None
@@ -806,6 +900,11 @@ def collect_candidates(state, queued_ids):
         if size_bytes <= 0:
             continue
 
+        # Keep candidate collection consistent with movie_item():
+        # current files below 5 GiB are not optimizer targets.
+        if size_bytes < 5 * 1024 ** 3:
+            continue
+
         resolution = file_resolution(movie_file)
         if not resolution:
             continue
@@ -896,8 +995,70 @@ def candidate_resolution_from_release(release):
     return quality_resolution(release.get("quality"))
 
 
+def release_matches_movie(item, release):
+    """Fail closed when an indexer result does not identify this movie."""
+    release_title = str(release.get("title") or "").strip()
+    movie_title = str(item.get("title") or "").strip()
+    movie_year = int(item.get("year") or 0)
+
+    if not release_title or not movie_title:
+        return False
+
+    def tokens(text):
+        return re.findall(r"[a-z0-9]+", text.lower())
+
+    release_tokens = tokens(release_title)
+    movie_tokens = tokens(movie_title)
+
+    if (
+        not movie_tokens
+        or len(release_tokens) < len(movie_tokens)
+        or release_tokens[:len(movie_tokens)] != movie_tokens
+    ):
+        return False
+
+    rest = release_tokens[len(movie_tokens):]
+
+    # Nothing after the movie title gives us too little evidence that this is
+    # a real release for the requested movie.
+    if not rest:
+        return False
+
+    # If the first token after the title is a plausible movie year, it must
+    # match Radarr's movie year exactly.
+    if re.fullmatch(r"(?:19|20)\d{2}", rest[0]):
+        if movie_year and int(rest[0]) != movie_year:
+            return False
+        rest = rest[1:]
+
+    if not rest:
+        return False
+
+    # After title[/year], require recognizable release metadata. This prevents
+    # prefix collisions such as "12 Strong Orphans" from matching "12 Strong".
+    metadata_tokens = {
+        "2160p", "1080p", "1080i", "720p", "576p", "480p",
+        "uhd", "bluray", "bdrip", "brrip", "remux",
+        "web", "webdl", "webrip", "webhd",
+        "hdtv", "dvdrip",
+        "x264", "x265", "h264", "h265", "hevc", "avc"
+    }
+
+    # Tokenization splits WEB-DL / WEBRip-style punctuation safely.
+    first = rest[0]
+    first_two = "".join(rest[:2]) if len(rest) >= 2 else first
+
+    if first not in metadata_tokens and first_two not in metadata_tokens:
+        return False
+
+    return True
+
+
 def evaluate_release(item, release, state):
     title = release.get("title") or ""
+
+    if not release_matches_movie(item, release):
+        return None, "movie identity mismatch"
 
     if dangerous_release_title(title):
         return None, "dangerous"
@@ -1017,6 +1178,7 @@ def evaluate_release(item, release, state):
         "atmos": candidate_atmos,
         "dynamic_range": candidate_dr,
         "seeders": seeders,
+        "indexer": str(release.get("indexer") or ""),
     }, None
 
 
@@ -1061,10 +1223,21 @@ def choose_best(item, releases, state):
         "SDR_UNKNOWN": 1
     }
 
+    def indexer_rank(choice):
+        name = (choice.get("indexer") or "").lower()
+
+        # Prefer TorrentLeech among candidates that already passed every
+        # optimizer safety gate. Public indexers remain valid fallbacks.
+        if "torrentleech" in name:
+            return 0
+
+        return 1
+
     pool.sort(key=lambda x: (
         -dr_rank.get(x.get("dynamic_range", "SDR_UNKNOWN"), 0),
         -int(bool(x.get("atmos", False))),
         -(x.get("audio_channels") or 0),
+        indexer_rank(x),
         x["size_bytes"],
         0 if x["codec"] == "x265" else 1,
         -x["seeders"],
@@ -1273,6 +1446,23 @@ def radarr_audio_allowed(
 def main():
     state = load_state()
 
+    # Optional internal mode used by the persistent UI worker when an
+    # optimizer-owned torrent dies.  It searches ONE exact movie only and
+    # never advances the normal persistent A-Z cursor.
+    try:
+        TARGET_MOVIE_ID = int(
+            os.environ.get("SMART_OPTIMIZER_MOVIE_ID", "0") or 0
+        )
+    except (TypeError, ValueError):
+        TARGET_MOVIE_ID = 0
+
+    MANUAL_TARGET_MODE = (
+        str(os.environ.get("SMART_OPTIMIZER_MANUAL_TARGET", "0"))
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+
     if LIVE:
         clean_old_attempts(state)
 
@@ -1295,7 +1485,11 @@ def main():
     # Maximum interactive searches in one execution.
     PER_RUN_SEARCH_BUDGET = max(1, SEARCHES_PER_RUN)
 
-    if LIVE:
+    if MANUAL_TARGET_MODE:
+        # Exact Manual Optimizer runs are independent of the scheduled
+        # persistent daily-search allowance.
+        remaining = PER_RUN_SEARCH_BUDGET
+    elif LIVE:
         remaining = min(
             PER_RUN_SEARCH_BUDGET,
             max(0, DAILY_SEARCH_BUDGET + DAILY_EXTRA_BUDGET - used)
@@ -1317,7 +1511,7 @@ def main():
         remaining
     )
 
-    if remaining <= 0:
+    if remaining <= 0 and not MANUAL_TARGET_MODE:
         print()
         print("Daily search budget exhausted.")
         print("Nothing to do.")
@@ -1350,11 +1544,70 @@ def main():
     errors = 0
 
     number = 0
+    targeted_done = False
+
     while searches < remaining and (TARGET_GRABS <= 0 or grabs < TARGET_GRABS):
-        item = next_movie_item(state, movies_by_id, queued_ids)
-        if item is None:
-            print("Reached the genuine end of the persistent movie queue.", flush=True)
-            break
+
+        if TARGET_MOVIE_ID:
+            if targeted_done:
+                break
+
+            targeted_done = True
+
+            movie = movies_by_id.get(TARGET_MOVIE_ID)
+
+            if not movie:
+                print(
+                    "TARGETED RETRY: movie ID %d not found."
+                    % TARGET_MOVIE_ID,
+                    flush=True
+                )
+                break
+
+            if TARGET_MOVIE_ID in optimizer_excluded_ids("radarr"):
+                print(
+                    "TARGETED RETRY: movie ID %d is excluded."
+                    % TARGET_MOVIE_ID,
+                    flush=True
+                )
+                break
+
+            # Targeted retry deliberately bypasses only the normal
+            # search-cycle cooldown and A-Z cursor. All media/release
+            # safety checks still happen through choose_best() and
+            # evaluate_release().
+            targeted_state = dict(state)
+            targeted_state["movies"] = dict(state.get("movies", {}))
+            targeted_state["movies"].pop(str(TARGET_MOVIE_ID), None)
+
+            item = movie_item(
+                movie,
+                targeted_state,
+                set()
+            )
+
+            if item is None:
+                print(
+                    "TARGETED RETRY: movie is not optimizer-eligible.",
+                    flush=True
+                )
+                break
+
+            print(
+                "TARGETED RETRY: restricting run to movie ID %d"
+                % TARGET_MOVIE_ID,
+                flush=True
+            )
+
+        else:
+            item = next_movie_item(state, movies_by_id, queued_ids)
+
+            if item is None:
+                print(
+                    "Reached the genuine end of the persistent movie queue.",
+                    flush=True
+                )
+                break
 
         number += 1
         print("-" * 68)
@@ -1375,14 +1628,15 @@ def main():
             print("    SEARCH PROGRESS: %d / %d" % (searches, remaining), flush=True)
 
             if LIVE:
-                increment_search_count(state)
-                mark_movie_searched(
-                    state,
-                    movie_id
-                )
+                if not MANUAL_TARGET_MODE:
+                    increment_search_count(state)
+                    mark_movie_searched(
+                        state,
+                        movie_id
+                    )
 
-                # Save immediately so a crash/restart does not
-                # accidentally reset our search budget.
+                # Targeted runs still persist optimizer state, but do not
+                # consume the scheduled counter or normal search cycle.
                 save_state(state)
 
         except Exception as e:
@@ -1440,10 +1694,112 @@ def main():
             # NO DELETE.
             # NO filesystem manipulation.
             # NO direct Deluge manipulation.
-            post(
-                "/release",
-                choice["release"]
+            # Snapshot the exact existing Radarr file BEFORE this
+            # optimizer-owned replacement can be imported.
+            #
+            # Candidate selection has already passed Smart Optimizer's
+            # saving-window, resolution, HDR/DV, codec, audio and other
+            # safety rules.  This record does not approve anything new;
+            # it only lets the persistent UI worker identify OUR grab.
+            current_movie = get("/movie/%d" % movie_id)
+            current_file = current_movie.get("movieFile") or {}
+
+            old_file_id = current_file.get("id")
+            old_file_size = int(current_file.get("size") or 0)
+
+            if not old_file_id or old_file_size <= 0:
+                raise RuntimeError(
+                    "Cannot record optimizer replacement: "
+                    "current Radarr movie file is unavailable"
+                )
+
+            approved_release = choice["release"]
+            approved_title = str(approved_release.get("title") or "")
+            approved_size = int(approved_release.get("size") or 0)
+
+            state.setdefault("pending_replacements", {})
+
+            pending_key = str(movie_id)
+
+            previous_pending = (
+                state["pending_replacements"].get(pending_key) or {}
             )
+            dead_retry_count = int(
+                previous_pending.get("dead_retry_count") or 0
+            )
+
+            # Persist intent BEFORE Radarr receives the release. This closes
+            # the old crash window where Radarr could accept a torrent before
+            # Smart Optimizer had recorded ownership.
+            state["pending_replacements"][pending_key] = {
+                "movie_id": int(movie_id),
+                "old_file_id": int(old_file_id),
+                "old_size": int(old_file_size),
+                "approved_title": approved_title,
+                "approved_size": approved_size,
+                "release_key": release_key(approved_release),
+                "created": now_ts(),
+                "status": "grabbing",
+                "dead_retry_count": dead_retry_count
+            }
+
+            save_state(state)
+
+            try:
+                post(
+                    "/release",
+                    choice["release"]
+                )
+            except Exception:
+                # Radarr did not successfully accept the release call.
+                # Remove only our pre-grab intent record. Existing movie file
+                # is untouched.
+                state.setdefault("pending_replacements", {}).pop(
+                    pending_key,
+                    None
+                )
+                save_state(state)
+                raise
+
+            state["pending_replacements"][pending_key]["status"] = "grabbed"
+            state["pending_replacements"][pending_key]["grabbed_at"] = now_ts()
+
+            # Bind this optimizer-owned grab to Radarr's exact queue/download
+            # identity. This makes source-tier-blocked imports fully automatic
+            # without relying on release-title equality.
+            ownership = bind_grabbed_download(
+                movie_id,
+                approved_release
+            )
+
+            if ownership:
+                state["pending_replacements"][pending_key]["download_id"] = (
+                    ownership["download_id"]
+                )
+                state["pending_replacements"][pending_key]["queue_id"] = (
+                    ownership["queue_id"]
+                )
+                state["pending_replacements"][pending_key]["bound_at"] = now_ts()
+
+                print(
+                    "    OWNERSHIP BOUND:",
+                    ownership["download_id"]
+                )
+            else:
+                print(
+                    "    OWNERSHIP PENDING: background worker will bind "
+                    "the Radarr queue entry."
+                )
+
+            # Mark it attempted immediately after Radarr accepted the grab.
+            # This also prevents a dead torrent from being selected again by
+            # a subsequent targeted retry.
+            mark_release_attempted(
+                state,
+                approved_release
+            )
+
+            save_state(state)
 
             grabs += 1
 
@@ -1453,13 +1809,6 @@ def main():
                     % (grabs, TARGET_GRABS),
                     flush=True
                 )
-
-            mark_release_attempted(
-                state,
-                choice["release"]
-            )
-
-            save_state(state)
 
             print("    LIVE: RELEASE SENT TO RADARR")
             print(
