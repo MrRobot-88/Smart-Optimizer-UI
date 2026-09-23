@@ -90,6 +90,36 @@ def df(path):
     rc,out,err=sh(["df","-h",str(p)])
     return out if rc==0 else "ERROR: "+err
 
+def container_mounts(container):
+    rc,out,err=sh(["docker","inspect",container])
+    if rc!=0:
+        return []
+    try:
+        obj=json.loads(out)[0]
+    except Exception:
+        return []
+    mounts=[]
+    for m in obj.get("Mounts") or []:
+        src=str(m.get("Source") or "").rstrip("/")
+        dst=str(m.get("Destination") or "").rstrip("/")
+        if src and dst:
+            mounts.append((dst,src))
+    mounts.sort(key=lambda x:len(x[0]),reverse=True)
+    return mounts
+
+def host_path(container_path,mounts):
+    p=str(container_path or "")
+    if not p:
+        return ""
+    for dst,src in mounts:
+        if p==dst or p.startswith(dst+"/"):
+            suffix=p[len(dst):]
+            return src+suffix
+    return p if Path(p).exists() else ""
+
+RAD_MOUNTS=container_mounts("Radarr-latest-SSD")
+DELUGE_MOUNTS=container_mounts("Deluge-SSD")
+
 def stat_line(path):
     p=Path(path)
     if not p.exists():
@@ -209,22 +239,28 @@ roots=rget("/rootfolder") or []
 
 print()
 print("===== RADARR ROOTS + FILESYSTEM FREE SPACE =====")
+host_roots=[]
 for root in roots:
     path=str(root.get("path") or "")
     if not path:
         continue
-    print("ROOT:",path)
-    print(df(path) or "df unavailable")
+    hp=host_path(path,RAD_MOUNTS)
+    print("ROOT(container):",path)
+    print("ROOT(host)     :",hp or "UNMAPPED")
+    if hp:
+        host_roots.append(hp)
+        print(df(hp) or "df unavailable")
 
 # Candidate locations that can retain deleted/replaced bytes.
 candidate_dirs=[]
 
 recycle=str(mm.get("recycleBin") or "").strip()
-if recycle:
-    candidate_dirs.append(("Radarr recycle bin",recycle))
+recycle_host=host_path(recycle,RAD_MOUNTS) if recycle else ""
+if recycle_host:
+    candidate_dirs.append(("Radarr recycle bin",recycle_host))
 
-for root in roots:
-    rp=str(root.get("path") or "").rstrip("/")
+for rp in host_roots:
+    rp=str(rp).rstrip("/")
     if not rp:
         continue
     candidate_dirs.extend([
@@ -247,13 +283,11 @@ for label,path in candidate_dirs:
     seen.add(path)
     if not Path(path).exists():
         continue
-    # For the optimizer config root, measure quarantine/backup children only.
+    # The optimizer config backups are source/state files and tiny compared
+    # with media; only report actual quarantine-like children here.
     if path=="/volume1/WDBLACK/ContainerConfigs/Smart-Optimizer-UI":
         for child in sorted(Path(path).iterdir()):
-            if (
-                child.name.startswith("pre-")
-                or "quarantine" in child.name.lower()
-            ):
+            if "quarantine" in child.name.lower():
                 value=du(str(child))
                 if value:
                     print(label,child,":",value)
@@ -320,6 +354,7 @@ for movie in warcraft:
         full=str(f.get("path") or "")
         if not full and path:
             full=os.path.join(path,str(f.get("relativePath") or ""))
+        full_host=host_path(full,RAD_MOUNTS)
         print(
             "  registered file id=%s | %s | %s"
             % (
@@ -328,7 +363,8 @@ for movie in warcraft:
                 f.get("relativePath") or full,
             )
         )
-        st=stat_line(full)
+        print("    host path:",full_host or "UNMAPPED")
+        st=stat_line(full_host) if full_host else None
         if st:
             print(
                 "    stat: inode=%s links=%s size=%s path=%s"
@@ -442,8 +478,9 @@ for h,t in torrents.items():
     if WARCRAFT_TOKEN not in name.lower():
         continue
     save_path=str((t or {}).get("save_path") or "")
-    if save_path:
-        warcraft_save_paths.add(save_path)
+    save_host=host_path(save_path,DELUGE_MOUNTS)
+    if save_host:
+        warcraft_save_paths.add(save_host)
     tracker=str((t or {}).get("tracker") or "")
     host=urllib.parse.urlparse(tracker).hostname or ""
     print(
@@ -458,7 +495,8 @@ for h,t in torrents.items():
         )
     )
     print("  name:",name)
-    print("  save_path:",save_path)
+    print("  save_path(container):",save_path)
+    print("  save_path(host)     :",save_host or "UNMAPPED")
 
 print()
 print("===== WARCRAFT FILE SEARCH IN RELEVANT LOCATIONS =====")
@@ -466,14 +504,15 @@ search_roots=set()
 
 for movie in warcraft:
     p=str(movie.get("path") or "")
-    if p:
-        search_roots.add(p)
+    hp=host_path(p,RAD_MOUNTS)
+    if hp:
+        search_roots.add(hp)
 
 for p in warcraft_save_paths:
     search_roots.add(p)
 
-if recycle:
-    search_roots.add(recycle)
+if recycle_host:
+    search_roots.add(recycle_host)
 
 for p in (
     "/volumeUSB2/usbshare/.smart-optimizer-quarantine",
@@ -531,13 +570,16 @@ print()
 print("===== DELUGE PAYLOAD SUMMARY =====")
 by_label={}
 by_path={}
+host_by_path={}
 
 for h,t in torrents.items():
     size=int((t or {}).get("total_size") or 0)
     label=str((t or {}).get("label") or "NONE")
     save_path=str((t or {}).get("save_path") or "UNKNOWN")
+    save_host=host_path(save_path,DELUGE_MOUNTS) or "UNMAPPED"
     by_label[label]=by_label.get(label,0)+size
     by_path[save_path]=by_path.get(save_path,0)+size
+    host_by_path[save_host]=host_by_path.get(save_host,0)+size
 
 for label,size in sorted(
     by_label.items(),
@@ -552,7 +594,21 @@ for path,size in sorted(
     key=lambda x:x[1],
     reverse=True,
 ):
-    print("save_path %-40s %s" % (path,human(size)))
+    print("save_path(container) %-32s %s" % (path,human(size)))
+
+print()
+print("===== DELUGE HOST PATH DISK USAGE =====")
+for path,size in sorted(
+    host_by_path.items(),
+    key=lambda x:x[1],
+    reverse=True,
+):
+    print("save_path(host) %-38s logical=%s" % (path,human(size)))
+    if path!="UNMAPPED" and Path(path).exists():
+        value=du(path)
+        if value:
+            print("  actual du:",value)
+        print(df(path) or "")
 
 print()
 print("========================================")
