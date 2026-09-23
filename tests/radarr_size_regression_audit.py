@@ -97,7 +97,6 @@ def history_all():
     return out
 
 movies=rget("/movie") or []
-files=rget("/moviefile") or []
 qrows=queue_all()
 history=history_all()
 
@@ -119,10 +118,7 @@ for wanted in targets:
     for movie in found:
         mid=int(movie.get("id") or 0)
         target_ids.add(mid)
-        mf=[
-            f for f in files
-            if int(f.get("movieId") or 0)==mid
-        ]
+        mf=rget("/moviefile?movieId=%d" % mid) or []
         print(
             "%s | id=%d | monitored=%s | hasFile=%s | path=%s"
             % (
