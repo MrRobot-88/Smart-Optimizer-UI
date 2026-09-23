@@ -1713,19 +1713,9 @@ ui=once(
 
 ui=once(
     ui,
-    '''    threading.Thread(
-        target=optimizer_import_worker,
-        name="radarr-optimizer-import",
-        daemon=True
-    ).start()
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    '''    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 ''',
     '''    threading.Thread(
-        target=optimizer_import_worker,
-        name="radarr-optimizer-import",
-        daemon=True
-    ).start()
-    threading.Thread(
         target=sonarr_tracker_retention_worker,
         name="sonarr-tracker-retention",
         daemon=True
