@@ -18,6 +18,7 @@ TARGETS = {
 
 STATE="/volume1/WDBLACK/radarr-smart-optimizer-state.json"
 CFG="/volume1/WDBLACK/ContainerConfigs/Radarr/config.xml"
+CONTROL="/volume1/WDBLACK/ContainerConfigs/Smart-Optimizer-UI/smart-optimizer-control.json"
 BASE="http://127.0.0.1:7272/api/v3"
 
 def ensure_ui_stopped():
@@ -109,108 +110,146 @@ def physical_root(movie_path):
 
 def load_deluge_hashes():
     """
-    Read-only Deluge Web JSON-RPC query.
-
-    linuxserver/deluge does not necessarily include deluge-console in PATH,
-    so query the already-running Web API instead. The known local Web UI
-    password is used only for localhost/LAN-container authentication and is
-    never printed.
+    Read-only Deluge Web JSON-RPC query using the already-saved local UI
+    connection settings. No password/token is embedded or printed.
     """
-    endpoints=[
-        "http://172.17.0.2:8112/json",
-        "http://127.0.0.1:8112/json",
-    ]
+    try:
+        with open(CONTROL,encoding="utf-8") as f:
+            controls=json.load(f)
+    except Exception as exc:
+        raise RuntimeError(
+            "cannot read Smart Optimizer control file: %s"
+            % exc
+        )
 
-    last_error=None
+    dcfg=(controls.get("deluge") or {})
 
-    for endpoint in endpoints:
-        try:
-            jar=http.cookiejar.CookieJar()
-            opener=urllib.request.build_opener(
-                urllib.request.HTTPCookieProcessor(jar)
-            )
-            rpc_id=0
+    scheme=str(
+        dcfg.get("scheme") or "http"
+    ).lower()
 
-            def rpc(method,params):
-                nonlocal rpc_id
-                rpc_id += 1
+    if scheme not in ("http","https"):
+        raise RuntimeError(
+            "invalid saved Deluge scheme"
+        )
 
-                data=json.dumps(
-                    {
-                        "method":method,
-                        "params":params,
-                        "id":rpc_id,
-                    }
-                ).encode("utf-8")
+    host=str(
+        dcfg.get("host") or ""
+    ).strip()
 
-                req=urllib.request.Request(
-                    endpoint,
-                    data=data,
-                    headers={
-                        "Content-Type":"application/json",
-                        "Accept":"application/json",
-                    },
-                    method="POST",
-                )
-
-                with opener.open(req,timeout=30) as r:
-                    obj=json.load(r)
-
-                if obj.get("error"):
-                    raise RuntimeError(
-                        "%s: %s"
-                        % (method,obj.get("error"))
-                    )
-
-                return obj.get("result")
-
-            if rpc("auth.login",["deluge"]) is not True:
-                raise RuntimeError(
-                    "Deluge Web authentication failed"
-                )
-
-            connected=bool(
-                rpc("web.connected",[])
-            )
-
-            if not connected:
-                hosts=rpc("web.get_hosts",[]) or []
-
-                if not hosts:
-                    raise RuntimeError(
-                        "Deluge Web has no daemon hosts"
-                    )
-
-                host_id=str(hosts[0][0])
-
-                if rpc("web.connect",[host_id]) is not True:
-                    raise RuntimeError(
-                        "Deluge Web could not connect to daemon"
-                    )
-
-            torrents=rpc(
-                "core.get_torrents_status",
-                [{},["name"]],
-            )
-
-            if not isinstance(torrents,dict):
-                raise RuntimeError(
-                    "Deluge returned invalid torrent listing"
-                )
-
-            return {
-                str(k).strip().upper()
-                for k in torrents
-                if str(k).strip()
-            }
-
-        except Exception as exc:
-            last_error=exc
-
-    raise RuntimeError(
-        "cannot read Deluge torrent list via Web JSON-RPC: %s"
-        % last_error
+    port=int(
+        dcfg.get("port") or 8112
     )
+
+    password=str(
+        dcfg.get("password") or ""
+    )
+
+    if not host:
+        raise RuntimeError(
+            "Deluge host is not configured in Smart Optimizer controls"
+        )
+
+    if not password:
+        raise RuntimeError(
+            "Deluge Web password is not configured in Smart Optimizer controls"
+        )
+
+    endpoint="%s://%s:%d/json" % (
+        scheme,
+        host,
+        port,
+    )
+
+    jar=http.cookiejar.CookieJar()
+    opener=urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(jar)
+    )
+    rpc_id=0
+
+    def rpc(method,params):
+        nonlocal rpc_id
+        rpc_id += 1
+
+        data=json.dumps(
+            {
+                "method":method,
+                "params":params,
+                "id":rpc_id,
+            }
+        ).encode("utf-8")
+
+        req=urllib.request.Request(
+            endpoint,
+            data=data,
+            headers={
+                "Content-Type":"application/json",
+                "Accept":"application/json",
+            },
+            method="POST",
+        )
+
+        with opener.open(req,timeout=30) as r:
+            obj=json.load(r)
+
+        if obj.get("error"):
+            raise RuntimeError(
+                "%s: %s"
+                % (
+                    method,
+                    obj.get("error"),
+                )
+            )
+
+        return obj.get("result")
+
+    if rpc("auth.login",[password]) is not True:
+        raise RuntimeError(
+            "Deluge Web authentication failed"
+        )
+
+    connected=bool(
+        rpc("web.connected",[])
+    )
+
+    if not connected:
+        hosts=rpc(
+            "web.get_hosts",
+            []
+        ) or []
+
+        if not hosts:
+            raise RuntimeError(
+                "Deluge Web has no daemon hosts"
+            )
+
+        host_id=str(
+            hosts[0][0]
+        )
+
+        if rpc(
+            "web.connect",
+            [host_id]
+        ) is not True:
+            raise RuntimeError(
+                "Deluge Web could not connect to daemon"
+            )
+
+    torrents=rpc(
+        "core.get_torrents_status",
+        [{},["name"]],
+    )
+
+    if not isinstance(torrents,dict):
+        raise RuntimeError(
+            "Deluge returned invalid torrent listing"
+        )
+
+    return {
+        str(k).strip().upper()
+        for k in torrents
+        if str(k).strip()
+    }
 
 ensure_ui_stopped()
 
