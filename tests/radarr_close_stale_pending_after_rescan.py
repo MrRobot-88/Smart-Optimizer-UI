@@ -106,64 +106,28 @@ def physical_root(movie_path):
 
     return result
 
-def deluge_has_hash(download_id):
-    # Read-only query inside the existing Deluge container.
-    # No Deluge password/token is embedded or printed.
-    commands=[
-        ["docker","exec","Deluge-SSD","deluge-console","info",download_id],
-        ["docker","exec","Deluge-SSD","deluge-console","info","-v",download_id],
-    ]
-
-    last_output=""
-
-    for cmd in commands:
-        p=subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
-        out=(p.stdout or "")+"\n"+(p.stderr or "")
-        last_output=out.strip()
-        low=out.lower()
-
-        # A positive exact-hash occurrence in successful output is enough.
-        if p.returncode == 0 and download_id.lower() in low:
-            return True,last_output
-
-        # Common no-match forms. Try next command once, then classify absent.
-        if any(
-            marker in low
-            for marker in (
-                "no torrents",
-                "no torrent",
-                "not found",
-                "doesn't exist",
-                "does not exist",
-                "invalid torrent",
-            )
-        ):
-            continue
-
-    # deluge-console often prints nothing for a non-matching info filter.
-    # We only accept absence when at least one command returned successfully
-    # and neither output contains the exact hash.
-    for cmd in commands:
-        p=subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        out=(p.stdout or "")+"\n"+(p.stderr or "")
-        if p.returncode == 0 and download_id.lower() not in out.lower():
-            return False,out.strip()
-
-    raise RuntimeError(
-        "cannot prove Deluge absence for %s; last output=%r"
-        % (download_id,last_output[:500])
+def load_deluge_verbose():
+    # One read-only listing of all Deluge torrents. Verbose output includes
+    # torrent IDs, so exact hashes can be checked without a password/token.
+    p=subprocess.run(
+        [
+            "docker","exec","Deluge-SSD",
+            "deluge-console","info","-v",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
+
+    out=(p.stdout or "")+"\n"+(p.stderr or "")
+
+    if p.returncode != 0:
+        raise RuntimeError(
+            "cannot read Deluge torrent list: %s"
+            % out.strip()[:500]
+        )
+
+    return out.upper()
 
 ensure_ui_stopped()
 
@@ -189,6 +153,11 @@ for q in queue:
         queue_ids.add(did)
 
 print("Queue rows:",len(queue))
+
+print("Loading read-only Deluge torrent list...")
+deluge_verbose=load_deluge_verbose()
+print("Deluge listing: OK")
+
 print()
 print("===== STRICT STALE-PENDING PROOF =====")
 
@@ -272,7 +241,7 @@ for mid,title in TARGETS.items():
             % mid
         )
 
-    present,deluge_output=deluge_has_hash(did)
+    present=(did in deluge_verbose)
 
     if present:
         raise SystemExit(
