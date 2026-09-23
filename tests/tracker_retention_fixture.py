@@ -33,6 +33,9 @@ for text,label,needles in (
             "torrentleech-movies",
             "tracker_policy_from_indexer",
             'state["tracker_jobs"][pending_key]["download_id"]',
+            "auto_processed_movie_ids",
+            "Automatic optimizer is strictly one-shot per movie forever.",
+            "mark_movie_searched",
         ],
     ),
     (
@@ -45,6 +48,9 @@ for text,label,needles in (
             "torrentleech-tv",
             "tracker_policy_from_indexer",
             '"media_type": "sonarr"',
+            "auto_processed_series_ids",
+            "AUTO ONE-SHOT SERIES SKIP:",
+            "mark_episode_searched",
         ],
     ),
     (
@@ -68,6 +74,7 @@ for text,label,needles in (
         )
 
 print("SOURCE STRUCTURE PASS")
+print("ONE-SHOT PRESERVATION PASS")
 
 os.environ.setdefault(
     "RADARR_KEY",
