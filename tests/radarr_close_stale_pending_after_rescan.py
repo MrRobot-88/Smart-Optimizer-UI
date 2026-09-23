@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import tempfile
+import http.cookiejar
 import urllib.parse
 import urllib.request
 
@@ -106,28 +107,110 @@ def physical_root(movie_path):
 
     return result
 
-def load_deluge_verbose():
-    # One read-only listing of all Deluge torrents. Verbose output includes
-    # torrent IDs, so exact hashes can be checked without a password/token.
-    p=subprocess.run(
-        [
-            "docker","exec","Deluge-SSD",
-            "deluge-console","info","-v",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
+def load_deluge_hashes():
+    """
+    Read-only Deluge Web JSON-RPC query.
+
+    linuxserver/deluge does not necessarily include deluge-console in PATH,
+    so query the already-running Web API instead. The known local Web UI
+    password is used only for localhost/LAN-container authentication and is
+    never printed.
+    """
+    endpoints=[
+        "http://172.17.0.2:8112/json",
+        "http://127.0.0.1:8112/json",
+    ]
+
+    last_error=None
+
+    for endpoint in endpoints:
+        try:
+            jar=http.cookiejar.CookieJar()
+            opener=urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(jar)
+            )
+            rpc_id=0
+
+            def rpc(method,params):
+                nonlocal rpc_id
+                rpc_id += 1
+
+                data=json.dumps(
+                    {
+                        "method":method,
+                        "params":params,
+                        "id":rpc_id,
+                    }
+                ).encode("utf-8")
+
+                req=urllib.request.Request(
+                    endpoint,
+                    data=data,
+                    headers={
+                        "Content-Type":"application/json",
+                        "Accept":"application/json",
+                    },
+                    method="POST",
+                )
+
+                with opener.open(req,timeout=30) as r:
+                    obj=json.load(r)
+
+                if obj.get("error"):
+                    raise RuntimeError(
+                        "%s: %s"
+                        % (method,obj.get("error"))
+                    )
+
+                return obj.get("result")
+
+            if rpc("auth.login",["deluge"]) is not True:
+                raise RuntimeError(
+                    "Deluge Web authentication failed"
+                )
+
+            connected=bool(
+                rpc("web.connected",[])
+            )
+
+            if not connected:
+                hosts=rpc("web.get_hosts",[]) or []
+
+                if not hosts:
+                    raise RuntimeError(
+                        "Deluge Web has no daemon hosts"
+                    )
+
+                host_id=str(hosts[0][0])
+
+                if rpc("web.connect",[host_id]) is not True:
+                    raise RuntimeError(
+                        "Deluge Web could not connect to daemon"
+                    )
+
+            torrents=rpc(
+                "core.get_torrents_status",
+                [{},["name"]],
+            )
+
+            if not isinstance(torrents,dict):
+                raise RuntimeError(
+                    "Deluge returned invalid torrent listing"
+                )
+
+            return {
+                str(k).strip().upper()
+                for k in torrents
+                if str(k).strip()
+            }
+
+        except Exception as exc:
+            last_error=exc
+
+    raise RuntimeError(
+        "cannot read Deluge torrent list via Web JSON-RPC: %s"
+        % last_error
     )
-
-    out=(p.stdout or "")+"\n"+(p.stderr or "")
-
-    if p.returncode != 0:
-        raise RuntimeError(
-            "cannot read Deluge torrent list: %s"
-            % out.strip()[:500]
-        )
-
-    return out.upper()
 
 ensure_ui_stopped()
 
@@ -155,8 +238,8 @@ for q in queue:
 print("Queue rows:",len(queue))
 
 print("Loading read-only Deluge torrent list...")
-deluge_verbose=load_deluge_verbose()
-print("Deluge listing: OK")
+deluge_hashes=load_deluge_hashes()
+print("Deluge torrents:",len(deluge_hashes))
 
 print()
 print("===== STRICT STALE-PENDING PROOF =====")
@@ -241,7 +324,7 @@ for mid,title in TARGETS.items():
             % mid
         )
 
-    present=(did in deluge_verbose)
+    present=(did in deluge_hashes)
 
     if present:
         raise SystemExit(
