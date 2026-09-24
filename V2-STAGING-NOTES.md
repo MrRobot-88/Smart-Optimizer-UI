@@ -23,8 +23,8 @@ The Sonarr v2 policy passed a real Ted Lasso S04E08 replacement test and synthet
 - WARN=0
 - FAIL=0
 
-## Not merged yet
+## Release-ready state
 
-The exact newest live `smart-optimizer-ui.py` from the NAS still needs to be synced before this branch is release-ready. The previous NAS-side bridge attempt stopped before Git operations because the expected local repository checkout was missing. Keeping this branch unmerged prevents an incomplete UI snapshot from being tagged as v2.0.0.
+The exact live NAS copies of `smart-optimizer-ui.py`, `radarr-smart-optimizer.py`, and `sonarr-smart-optimizer.py` have now been synced into this branch through the GitHub bridge after local syntax, SHA, private-key and SPK-structure checks.
 
 No API keys, connection files, optimizer state, or control JSON are included.
