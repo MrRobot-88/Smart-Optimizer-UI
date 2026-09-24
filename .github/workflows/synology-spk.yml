@@ -59,7 +59,25 @@ jobs:
           path: dist/*.spk
           if-no-files-found: error
 
-      - name: Attach SPK to GitHub Release
+      - name: Publish v2.0.0 GitHub Release from main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release v2.0.0]')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SPK="$(find dist -name '*.spk' -print -quit)"
+          test -n "$SPK"
+          TAG="v${{ steps.version.outputs.value }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$SPK" --clobber
+          else
+            gh release create "$TAG" "$SPK" \
+              --target "$GITHUB_SHA" \
+              --title "Smart Optimizer UI $TAG" \
+              --notes-file RELEASE-NOTES-v2.0.0.md
+          fi
+
+      - name: Attach SPK to existing tag release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
