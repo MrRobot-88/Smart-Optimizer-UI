@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$ROOT/packaging/synology"
 OUT="${1:-$ROOT/dist}"
-VERSION="${VERSION:-1.1.0}"
+VERSION="${VERSION:-2.0.0}"
 PKG="smartoptimizerui"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
