@@ -180,37 +180,95 @@ def post(path, data):
     return api("POST", path, data)
 
 
-def bind_grabbed_download(movie_id, approved_release, attempts=15, delay=1.0):
-    """Return exact Radarr queue ownership for a release we just grabbed."""
+def all_radarr_queue_records():
+    """Return every Radarr queue row across all pages."""
+    records = []
+    page = 1
+    page_size = 100
+
+    while True:
+        data = get(
+            "/queue?page=%d&pageSize=%d&includeUnknownMovieItems=true"
+            % (page, page_size)
+        ) or {}
+        batch = data.get("records") or []
+        records.extend(batch)
+
+        try:
+            total = int(data.get("totalRecords") or len(records))
+        except (TypeError, ValueError):
+            total = len(records)
+
+        if not batch or len(records) >= total or len(batch) < page_size:
+            break
+
+        page += 1
+
+    return records
+
+
+def queue_ids_for_movie(movie_id):
+    return {
+        int(row.get("id") or 0)
+        for row in all_radarr_queue_records()
+        if int(row.get("movieId") or 0) == int(movie_id)
+        and int(row.get("id") or 0) > 0
+    }
+
+
+def bind_grabbed_download(
+    movie_id,
+    approved_release,
+    preexisting_queue_ids=None,
+    attempts=15,
+    delay=1.0
+):
+    """Bind only an exact hash or a queue row proven new after our grab."""
     expected_hash = release_infohash(approved_release)
+    preexisting = set()
+
+    for value in (preexisting_queue_ids or []):
+        try:
+            queue_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if queue_id > 0:
+            preexisting.add(queue_id)
+
+    # Without a release hash, a pre-grab queue snapshot is mandatory. This
+    # deliberately fails closed instead of guessing from title/movie alone.
+    if not expected_hash and preexisting_queue_ids is None:
+        return None
 
     for _ in range(attempts):
         try:
-            data = get(
-                "/queue?page=1&pageSize=100"
-                "&includeUnknownMovieItems=true"
-            ) or {}
-
             rows = [
-                r for r in (data.get("records") or [])
-                if int(r.get("movieId") or 0) == int(movie_id)
+                row for row in all_radarr_queue_records()
+                if int(row.get("movieId") or 0) == int(movie_id)
             ]
 
             if expected_hash:
                 rows = [
-                    r for r in rows
-                    if str(r.get("downloadId") or "").strip().upper()
+                    row for row in rows
+                    if str(row.get("downloadId") or "").strip().upper()
                     == expected_hash.upper()
+                ]
+            else:
+                rows = [
+                    row for row in rows
+                    if int(row.get("id") or 0) > 0
+                    and int(row.get("id") or 0) not in preexisting
                 ]
 
             if len(rows) == 1:
                 row = rows[0]
                 download_id = str(row.get("downloadId") or "").strip()
+                queue_id = int(row.get("id") or 0)
 
-                if download_id:
+                if download_id and queue_id:
                     return {
                         "download_id": download_id,
-                        "queue_id": int(row.get("id") or 0)
+                        "queue_id": queue_id
                     }
 
         except Exception:
@@ -235,7 +293,9 @@ def blank_state():
         "movie_cursor": 0,
         "known_movie_ids": [],
         "queue_initialized": False,
-        "pending_replacements": {}
+        "pending_replacements": {},
+        "auto_processed_movie_ids": [],
+        "tracker_jobs": {}
     }
 
 
@@ -256,6 +316,8 @@ def load_state():
         state.setdefault("known_movie_ids", [])
         state.setdefault("queue_initialized", False)
         state.setdefault("pending_replacements", {})
+        state.setdefault("auto_processed_movie_ids", [])
+        state.setdefault("tracker_jobs", {})
 
         return state
 
@@ -307,12 +369,64 @@ def increment_search_count(state):
             state["daily"].pop(old, None)
 
 
+def auto_processed_movie_ids(state):
+    """Movies that have already had their one automatic optimizer search."""
+    processed = {
+        int(x)
+        for x in state.get("auto_processed_movie_ids", [])
+        if str(x).isdigit()
+    }
+
+    # Migration from all older optimizer state versions: any movie with at
+    # least one successful /release search is permanently one-shot processed.
+    for key, entry in (state.get("movies", {}) or {}).items():
+        try:
+            if bool(entry.get("auto_processed")) or int(entry.get("search_cycles", 0)) >= 1:
+                processed.add(int(key))
+        except (TypeError, ValueError, AttributeError):
+            continue
+
+    return processed
+
+
 def mark_movie_searched(state, movie_id):
+    """Persist the permanent automatic one-shot gate after a real search."""
+    movie_id = int(movie_id)
     key = str(movie_id)
     state["movies"].setdefault(key, {})
     entry = state["movies"][key]
     entry["last_search"] = now_ts()
-    entry["search_cycles"] = min(2, int(entry.get("search_cycles", 0)) + 1)
+    entry["search_cycles"] = max(1, int(entry.get("search_cycles", 0)))
+    entry["auto_processed"] = True
+
+    processed = auto_processed_movie_ids(state)
+    processed.add(movie_id)
+    state["auto_processed_movie_ids"] = sorted(processed)
+
+
+def tracker_policy_from_indexer(indexer):
+    """
+    Persist tracker retention from the exact indexer selected by Arr.
+
+    TorrentLeech is retained/seeding. Every other identified indexer is
+    eligible for exact-hash Deluge cleanup only after verified import.
+    Unknown indexer stays unresolved and is never automatically deleted.
+    """
+    raw = str(indexer or "").strip()
+
+    if not raw:
+        return ""
+
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        "",
+        raw.lower()
+    )
+
+    if "torrentleech" in normalized:
+        return "keep_seed"
+
+    return "remove_after_verified_success"
 
 
 def release_infohash(release):
@@ -582,33 +696,11 @@ def file_resolution(file_obj):
 def active_movie_ids():
     ids = set()
 
-    page = 1
+    for item in all_radarr_queue_records():
+        movie_id = item.get("movieId")
 
-    while True:
-        path = (
-            "/queue?page=%d&pageSize=100"
-            "&includeUnknownMovieItems=true"
-        ) % page
-
-        data = get(path)
-
-        if not data:
-            break
-
-        records = data.get("records", [])
-
-        for item in records:
-            movie_id = item.get("movieId")
-
-            if movie_id:
-                ids.add(int(movie_id))
-
-        total = int(data.get("totalRecords", len(records)))
-
-        if page * 100 >= total:
-            break
-
-        page += 1
+        if movie_id:
+            ids.add(int(movie_id))
 
     return ids
 
@@ -760,18 +852,97 @@ def append_new_movies(state, movies):
     return added
 
 
+def _root_video_name(relative_path):
+    """Return a root-level video relative path, or None for subfolders."""
+    value = str(relative_path or "").replace("\\", "/").strip("/")
+    if not value or "/" in value:
+        return None
+    return value
+
+
+def radarr_root_movie_file_guard(movie_id, movie_path):
+    """
+    Fail closed unless Radarr has exactly one registered movie file and the
+    filesystem has exactly one root-level video, and both names are identical.
+
+    Subfolder videos such as backdrops/theme.mp4 and specials/* are ignored.
+    """
+    try:
+        registered = get(
+            "/moviefile?movieId=%d" % int(movie_id)
+        ) or []
+
+        media = get(
+            "/filesystem/mediafiles?path=%s"
+            % urllib.parse.quote(str(movie_path or ""), safe="")
+        ) or []
+    except Exception as exc:
+        return False, {
+            "reason": "filesystem guard API error",
+            "error": str(exc),
+            "registered_count": None,
+            "root_video_count": None,
+        }
+
+    registered_root = []
+    for item in registered:
+        root_name = _root_video_name(item.get("relativePath"))
+        if root_name:
+            registered_root.append({
+                "id": int(item.get("id") or 0),
+                "name": root_name,
+                "size": int(item.get("size") or 0),
+            })
+
+    physical_root = []
+    for item in media:
+        root_name = _root_video_name(item.get("relativePath"))
+        if root_name:
+            physical_root.append(root_name)
+
+    clean = (
+        len(registered) == 1
+        and len(registered_root) == 1
+        and len(physical_root) == 1
+        and registered_root[0]["name"] == physical_root[0]
+    )
+
+    return clean, {
+        "reason": "clean" if clean else "competing/missing root movie file",
+        "registered_count": len(registered),
+        "registered_root": registered_root,
+        "physical_root": physical_root,
+    }
+
+
 def movie_item(movie, state, queued_ids):
     """Return an optimizer-searchable movie item, or None without consuming search quota."""
     movie_id = movie.get("id")
     if not movie_id or not movie.get("hasFile") or movie_id in queued_ids:
         return None
 
-    history = state.get("movies", {}).get(str(movie_id), {})
-    cycles = int(history.get("search_cycles", 0))
-    last_search = history.get("last_search")
-    if cycles >= 2:
+    # Automatic optimizer is strictly one-shot per movie forever.
+    # Manual Optimizer creates a temporary state with this ID removed, so the
+    # user can explicitly retry as many times as desired.
+    if int(movie_id) in auto_processed_movie_ids(state):
         return None
-    if cycles == 1 and last_search and age_days(last_search) < 180:
+
+    # A movie folder must be unambiguous BEFORE we spend its one automatic
+    # indexer search. Theme/special videos in subfolders are intentionally
+    # ignored; a second root-level movie file fails closed.
+    folder_clean, folder_state = radarr_root_movie_file_guard(
+        movie_id,
+        movie.get("path") or ""
+    )
+    if not folder_clean:
+        print(
+            "    FOLDER GUARD BLOCK: %s -- %s"
+            % (
+                movie.get("title") or "Unknown movie",
+                json.dumps(folder_state, ensure_ascii=False)
+            ),
+            flush=True
+        )
         return None
 
     movie_file = movie.get("movieFile") or {}
@@ -1054,6 +1225,143 @@ def release_matches_movie(item, release):
     return True
 
 
+
+def _radarr_cut_suffix_tokens(text, movie_title="", movie_year=0):
+    """Return release/file tokens after the known movie title and year."""
+    tokens = re.findall(r"[a-z0-9]+", str(text or "").lower())
+    movie_tokens = re.findall(
+        r"[a-z0-9]+",
+        str(movie_title or "").lower()
+    )
+
+    if (
+        movie_tokens
+        and len(tokens) >= len(movie_tokens)
+        and tokens[:len(movie_tokens)] == movie_tokens
+    ):
+        tokens = tokens[len(movie_tokens):]
+
+    year = str(int(movie_year or 0)) if movie_year else ""
+
+    if year and tokens and tokens[0] == year:
+        tokens = tokens[1:]
+
+    return tokens
+
+
+def radarr_protected_cut(
+    text,
+    movie_title="",
+    movie_year=0,
+    edition="",
+):
+    """
+    Detect cuts that must never be replaced by an ordinary/theatrical release.
+
+    Protected:
+      * Extended / Extended Cut / Extended Edition / Extended Version
+      * Limited Edition
+      * Special Edition
+      * Director Cut / Directors Cut / Director's Cut
+      * DC abbreviation when it appears as an edition or near the front of the
+        release suffix, e.g. Movie.2012.DC.1080p.BluRay...
+
+    The known movie title is stripped first so titles containing words such as
+    "Extended" or "DC" do not accidentally trigger edition protection.
+    """
+    suffix = _radarr_cut_suffix_tokens(
+        text,
+        movie_title,
+        movie_year
+    )
+
+    edition_norm = " ".join(
+        re.findall(
+            r"[a-z0-9]+",
+            str(edition or "").lower()
+        )
+    )
+
+    suffix_norm = " ".join(suffix)
+    combined = (edition_norm + " " + suffix_norm).strip()
+
+    if re.search(
+        r"\bextended(?:\s+(?:cut|edition|version))?\b",
+        combined
+    ):
+        return True
+
+    if re.search(
+        r"\b(?:limited|special)\s+edition\b",
+        combined
+    ):
+        return True
+
+    if re.search(
+        r"\bdirector(?:s|\s+s)?\s+cut\b",
+        combined
+    ):
+        return True
+
+    # Explicit edition metadata saying DC is authoritative.
+    if "dc" in edition_norm.split():
+        return True
+
+    # Standalone DC is commonly placed immediately after title/year.
+    # Restrict it to the first few suffix tokens to avoid treating a release
+    # group ending in "-DC" as an edition.
+    if "dc" in suffix[:4]:
+        return True
+
+    return False
+
+
+def radarr_cut_replacement_allowed(item, release):
+    """
+    If the CURRENT library file is a protected non-theatrical cut, the
+    replacement must explicitly advertise a protected cut as well.
+    """
+    movie_file = item.get("movie_file") or {}
+    movie_title = item.get("title") or ""
+    movie_year = item.get("year") or 0
+
+    current_text = str(
+        movie_file.get("relativePath")
+        or movie_file.get("path")
+        or ""
+    )
+
+    current_edition = str(
+        movie_file.get("edition")
+        or ""
+    )
+
+    if not radarr_protected_cut(
+        current_text,
+        movie_title,
+        movie_year,
+        current_edition,
+    ):
+        return True
+
+    candidate_title = str(
+        release.get("title")
+        or ""
+    )
+
+    candidate_edition = str(
+        release.get("edition")
+        or ""
+    )
+
+    return radarr_protected_cut(
+        candidate_title,
+        movie_title,
+        movie_year,
+        candidate_edition,
+    )
+
+
 def evaluate_release(item, release, state):
     title = release.get("title") or ""
 
@@ -1065,6 +1373,17 @@ def evaluate_release(item, release, state):
 
     if not radarr_rejections_ok(release):
         return None, "radarr rejection"
+
+    # EDITION SAFETY RULE:
+    # An ordinary/theatrical release may never replace an existing
+    # Extended / Limited Edition / Special Edition / Director's Cut / DC movie.
+    if not radarr_cut_replacement_allowed(item, release):
+        print(
+            "    CUT RULE: REJECT theatrical/ordinary candidate "
+            "for protected Extended/Limited/Special/Director's Cut/DC current file",
+            flush=True
+        )
+        return None, "theatrical cannot replace protected cut"
 
     if release_recently_attempted(state, release):
         return None, "recently attempted"
@@ -1104,6 +1423,36 @@ def evaluate_release(item, release, state):
 
     candidate_mib = mib(size_bytes)
     current_mib = item["size_mib"]
+
+    # ABSOLUTE STORAGE INVARIANT:
+    # A replacement is NEVER allowed to be larger than the file already in
+    # the library, regardless of resolution upgrade, profile or monitored
+    # state. 0% growth tolerance means equal size is the absolute ceiling;
+    # the normal minimum-saving rule below is still stricter in practice.
+    SIZE_EPSILON_MIB = 1e-6
+
+    if candidate_mib > current_mib + SIZE_EPSILON_MIB:
+        print(
+            "    ABSOLUTE SIZE RULE: candidate %.1f MiB > current %.1f MiB | REJECT"
+            % (candidate_mib, current_mib),
+            flush=True
+        )
+        return None, "candidate larger than current file"
+
+    # 1080p movie downloads should stay compact even when the current file is
+    # very large. Prefer ranking still chooses smaller qualifying releases.
+    MAX_1080P_REPLACEMENT_MIB = 10 * 1024
+
+    if (
+        candidate_resolution == 1080
+        and candidate_mib > MAX_1080P_REPLACEMENT_MIB + SIZE_EPSILON_MIB
+    ):
+        print(
+            "    1080P SIZE CEILING: %.2f GiB > 10.00 GiB | REJECT"
+            % (candidate_mib / 1024.0),
+            flush=True
+        )
+        return None, "1080p candidate above 10 GiB ceiling"
 
     saving = ((current_mib - candidate_mib) / current_mib) * 100.0
 
@@ -1578,7 +1927,20 @@ def main():
             # evaluate_release().
             targeted_state = dict(state)
             targeted_state["movies"] = dict(state.get("movies", {}))
-            targeted_state["movies"].pop(str(TARGET_MOVIE_ID), None)
+            targeted_state["auto_processed_movie_ids"] = list(
+                state.get("auto_processed_movie_ids", [])
+            )
+
+            # Only an explicit Manual Optimizer request may bypass the
+            # permanent one-shot gate. Automatic/internal targeted retries
+            # remain blocked and require the user to retry manually.
+            if MANUAL_TARGET_MODE:
+                targeted_state["movies"].pop(str(TARGET_MOVIE_ID), None)
+                targeted_state["auto_processed_movie_ids"] = [
+                    x
+                    for x in targeted_state["auto_processed_movie_ids"]
+                    if int(x) != TARGET_MOVIE_ID
+                ]
 
             item = movie_item(
                 movie,
@@ -1630,13 +1992,17 @@ def main():
             if LIVE:
                 if not MANUAL_TARGET_MODE:
                     increment_search_count(state)
-                    mark_movie_searched(
-                        state,
-                        movie_id
-                    )
 
-                # Targeted runs still persist optimizer state, but do not
-                # consume the scheduled counter or normal search cycle.
+                # Any successful interactive search permanently closes this
+                # movie to future AUTOMATIC optimizer passes. Manual Optimizer
+                # still bypasses this gate explicitly.
+                mark_movie_searched(
+                    state,
+                    movie_id
+                )
+
+                # Manual targeted runs do not consume the scheduled counter,
+                # but they do keep the movie closed to future automatic runs.
                 save_state(state)
 
         except Exception as e:
@@ -1702,12 +2068,36 @@ def main():
             # safety rules.  This record does not approve anything new;
             # it only lets the persistent UI worker identify OUR grab.
             current_movie = get("/movie/%d" % movie_id)
+
+            # Re-check immediately before the grab. The initial folder guard
+            # ran before the interactive release search; the folder may have
+            # changed while that search was being evaluated.
+            folder_clean, folder_state = radarr_root_movie_file_guard(
+                movie_id,
+                current_movie.get("path") or ""
+            )
+            if not folder_clean:
+                print(
+                    "    SKIP: folder changed after search; refusing grab: %s"
+                    % json.dumps(folder_state, ensure_ascii=False),
+                    flush=True
+                )
+                print()
+                continue
+
             current_file = current_movie.get("movieFile") or {}
 
             old_file_id = current_file.get("id")
             old_file_size = int(current_file.get("size") or 0)
+            old_relative_path = str(
+                current_file.get("relativePath") or ""
+            ).strip()
 
-            if not old_file_id or old_file_size <= 0:
+            if (
+                not old_file_id
+                or old_file_size <= 0
+                or not old_relative_path
+            ):
                 raise RuntimeError(
                     "Cannot record optimizer replacement: "
                     "current Radarr movie file is unavailable"
@@ -1716,10 +2106,28 @@ def main():
             approved_release = choice["release"]
             approved_title = str(approved_release.get("title") or "")
             approved_size = int(approved_release.get("size") or 0)
+            source_indexer = str(
+                approved_release.get("indexer") or ""
+            ).strip()
+            tracker_policy = tracker_policy_from_indexer(
+                source_indexer
+            )
+
+            # Snapshot exact queue IDs BEFORE sending the release to Radarr.
+            # If a release has no hash, a newly appeared queue row is the only
+            # fallback ownership proof we allow.
+            pre_grab_queue_ids = sorted(queue_ids_for_movie(movie_id))
 
             state.setdefault("pending_replacements", {})
+            state.setdefault("tracker_jobs", {})
 
             pending_key = str(movie_id)
+
+            if state["tracker_jobs"].get(pending_key):
+                raise RuntimeError(
+                    "Tracker retention job already exists for movie %d"
+                    % int(movie_id)
+                )
 
             previous_pending = (
                 state["pending_replacements"].get(pending_key) or {}
@@ -1735,12 +2143,35 @@ def main():
                 "movie_id": int(movie_id),
                 "old_file_id": int(old_file_id),
                 "old_size": int(old_file_size),
+                "old_relative_path": old_relative_path,
                 "approved_title": approved_title,
                 "approved_size": approved_size,
                 "release_key": release_key(approved_release),
+                "pre_grab_queue_ids": pre_grab_queue_ids,
                 "created": now_ts(),
                 "status": "grabbing",
                 "dead_retry_count": dead_retry_count
+            }
+
+            state["tracker_jobs"][pending_key] = {
+                "media_type": "radarr",
+                "media_id": int(movie_id),
+                "approved_title": approved_title,
+                "source_indexer": source_indexer,
+                "tracker_policy": tracker_policy,
+                "policy_source": (
+                    "indexer"
+                    if tracker_policy
+                    else "unresolved"
+                ),
+                "desired_label": (
+                    "torrentleech-movies"
+                    if tracker_policy == "keep_seed"
+                    else ""
+                ),
+                "pre_grab_queue_ids": pre_grab_queue_ids,
+                "created": now_ts(),
+                "status": "grabbing"
             }
 
             save_state(state)
@@ -1758,18 +2189,25 @@ def main():
                     pending_key,
                     None
                 )
+                state.setdefault("tracker_jobs", {}).pop(
+                    pending_key,
+                    None
+                )
                 save_state(state)
                 raise
 
             state["pending_replacements"][pending_key]["status"] = "grabbed"
             state["pending_replacements"][pending_key]["grabbed_at"] = now_ts()
+            state["tracker_jobs"][pending_key]["status"] = "grabbed"
+            state["tracker_jobs"][pending_key]["grabbed_at"] = now_ts()
 
             # Bind this optimizer-owned grab to Radarr's exact queue/download
             # identity. This makes source-tier-blocked imports fully automatic
             # without relying on release-title equality.
             ownership = bind_grabbed_download(
                 movie_id,
-                approved_release
+                approved_release,
+                pre_grab_queue_ids
             )
 
             if ownership:
@@ -1780,6 +2218,13 @@ def main():
                     ownership["queue_id"]
                 )
                 state["pending_replacements"][pending_key]["bound_at"] = now_ts()
+                state["tracker_jobs"][pending_key]["download_id"] = (
+                    ownership["download_id"]
+                )
+                state["tracker_jobs"][pending_key]["queue_id"] = (
+                    ownership["queue_id"]
+                )
+                state["tracker_jobs"][pending_key]["bound_at"] = now_ts()
 
                 print(
                     "    OWNERSHIP BOUND:",

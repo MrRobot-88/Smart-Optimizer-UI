@@ -42,9 +42,9 @@ The two optimizers intentionally do **not** use identical replacement rules.
 
 **Radarr is storage-first.** Its replacements must remain inside the configured saving window. It does not inherit Sonarr's low-resolution size-growth exception. Current movie files below **5 GiB** are skipped before an interactive optimizer search.
 
-**Sonarr** has a special low-resolution rule for episodes currently below 1080p: a higher-resolution candidate up to the profile target may be smaller, equal-sized or at most **40% larger**. This exception does not apply to 1080p → 2160p. Current episode files below **400 MiB** are skipped before an interactive optimizer search.
+**Sonarr** uses a stricter v2 selection policy. TorrentLeech is the primary valid candidate pool from each Sonarr release search; other indexers are fallback only when no valid TorrentLeech result exists. Normal 1080p optimization is storage-first: the smallest valid 1080p release wins, and HDR/Atmos do not outrank a smaller file. Existing 720p may upgrade only to 1080p and may grow by at most **40%**. Existing 1080p/2160p replacements must be strictly smaller, with an absolute **40% maximum reduction per pass**. The UHD profile requires 2160p with at least HDR and prefers DV+HDR, then HDR, then Atmos, then smaller size. AV1 and single-episode season/multi-episode packs are rejected.
 
-Both engines include conservative dynamic-range rules, reject AV1 candidates, reject Dolby Vision-only candidates without HDR fallback, and apply audio safety/ranking logic. See the standalone READMEs for the detailed engine policies.
+Current episode files below **400 MiB** are skipped before an interactive optimizer search. See the standalone READMEs for the detailed engine policies.
 
 ## Supported platforms
 
@@ -211,13 +211,13 @@ The current release includes:
 - Download radar and recent file-change history
 - Optimizer-only exclusions with library search, recent exclusions and full exclusion management
 - Radarr storage-first replacement policy
-- Sonarr low-resolution upgrade support up to +40% size growth for existing content below 1080p
+- Sonarr TorrentLeech-first candidate pool, smallest-first normal 1080p ranking, and 720p→1080p-only +40% upgrade exception
 - Dedicated cached-library Manual Optimizer for one Radarr movie or Sonarr series
 - Radarr 5 GiB current-file search floor and Sonarr 400 MiB current-episode search floor
 - Radarr optimizer-owned safe import handling for source-tier-only import blocks
-- HDR/Dolby Vision safety rules
+- Sonarr UHD preference for DV+HDR / HDR / Atmos with smaller-file tie breaking
 - AV1 rejection
-- Audio/channel protection and Atmos-aware ranking
+- Single-episode season-pack/multi-episode protection
 - Persistent state, daily search budgets and temporary extra searches
 
 Radarr and Sonarr intentionally use different replacement policies. See their standalone repositories for the detailed rules.

@@ -210,6 +210,191 @@ def post(path, data):
     return api("POST", path, data)
 
 
+def all_sonarr_queue_records():
+    records = []
+    page = 1
+    page_size = 250
+
+    while True:
+        data = get(
+            "/queue?page=%d&pageSize=%d"
+            "&includeUnknownSeriesItems=true"
+            % (page, page_size)
+        ) or {}
+
+        batch = data.get("records") or []
+        records.extend(batch)
+
+        try:
+            total = int(
+                data.get("totalRecords")
+                or len(records)
+            )
+        except (TypeError, ValueError):
+            total = len(records)
+
+        if (
+            not batch
+            or len(records) >= total
+            or len(batch) < page_size
+        ):
+            break
+
+        page += 1
+
+    return records
+
+
+def queue_ids_for_episode(episode_id):
+    return {
+        int(row.get("id") or 0)
+        for row in all_sonarr_queue_records()
+        if int(row.get("episodeId") or 0)
+        == int(episode_id)
+        and int(row.get("id") or 0) > 0
+    }
+
+
+def release_infohash(release):
+    for field in (
+        "downloadId",
+        "torrentInfoHash",
+        "infoHash",
+        "guid",
+        "downloadUrl",
+        "magnetUrl",
+    ):
+        value = str(
+            release.get(field) or ""
+        ).strip()
+
+        if not value:
+            continue
+
+        match = re.search(
+            r"(?i)(?:btih:|/)([a-f0-9]{40})(?:$|[?&/])",
+            value
+        )
+
+        if not match:
+            match = re.search(
+                r"(?i)\b([a-f0-9]{40})\b",
+                value
+            )
+
+        if match:
+            return match.group(1).upper()
+
+    return ""
+
+
+def bind_grabbed_download(
+    episode_id,
+    approved_release,
+    preexisting_queue_ids=None,
+    attempts=15,
+    delay=1.0,
+):
+    expected_hash = release_infohash(
+        approved_release
+    )
+
+    preexisting = set()
+
+    for value in (
+        preexisting_queue_ids or []
+    ):
+        try:
+            queue_id = int(value)
+        except (TypeError, ValueError):
+            continue
+
+        if queue_id > 0:
+            preexisting.add(queue_id)
+
+    if (
+        not expected_hash
+        and preexisting_queue_ids is None
+    ):
+        return None
+
+    for _ in range(attempts):
+        try:
+            rows = [
+                row
+                for row in all_sonarr_queue_records()
+                if int(row.get("episodeId") or 0)
+                == int(episode_id)
+            ]
+
+            if expected_hash:
+                rows = [
+                    row
+                    for row in rows
+                    if str(
+                        row.get("downloadId") or ""
+                    ).strip().upper()
+                    == expected_hash
+                ]
+            else:
+                rows = [
+                    row
+                    for row in rows
+                    if int(row.get("id") or 0) > 0
+                    and int(row.get("id") or 0)
+                    not in preexisting
+                ]
+
+            if len(rows) == 1:
+                row = rows[0]
+
+                download_id = str(
+                    row.get("downloadId") or ""
+                ).strip()
+
+                queue_id = int(
+                    row.get("id") or 0
+                )
+
+                if download_id and queue_id:
+                    return {
+                        "download_id": download_id,
+                        "queue_id": queue_id,
+                    }
+
+        except Exception:
+            pass
+
+        time.sleep(delay)
+
+    return None
+
+
+def tracker_policy_from_indexer(indexer):
+    """
+    Persist tracker retention from the exact indexer selected by Arr.
+
+    TorrentLeech is retained/seeding. Every other identified indexer is
+    eligible for exact-hash Deluge cleanup only after verified import.
+    Unknown indexer stays unresolved and is never automatically deleted.
+    """
+    raw = str(indexer or "").strip()
+
+    if not raw:
+        return ""
+
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        "",
+        raw.lower()
+    )
+
+    if "torrentleech" in normalized:
+        return "keep_seed"
+
+    return "remove_after_verified_success"
+
+
 # ============================================================
 # STATE
 # ============================================================
@@ -225,7 +410,9 @@ def blank_state():
         "known_series_ids": [],
         "series_queue": [],
         "series_cursor": 0,
-        "queue_initialized": False
+        "queue_initialized": False,
+        "auto_processed_series_ids": [],
+        "tracker_jobs": {}
     }
 
 
@@ -247,6 +434,8 @@ def load_state():
         state.setdefault("series_queue", [])
         state.setdefault("series_cursor", 0)
         state.setdefault("queue_initialized", False)
+        state.setdefault("auto_processed_series_ids", [])
+        state.setdefault("tracker_jobs", {})
 
         return state
 
@@ -299,11 +488,59 @@ def increment_search_count(state):
 
 
 def mark_episode_searched(state, episode_id):
+    """Each episode receives at most one automatic /release search."""
     key = str(episode_id)
     state["episodes"].setdefault(key, {})
     entry = state["episodes"][key]
     entry["last_search"] = now_ts()
-    entry["search_cycles"] = min(2, int(entry.get("search_cycles", 0)) + 1)
+    entry["search_cycles"] = max(1, int(entry.get("search_cycles", 0)))
+    entry["auto_processed"] = True
+
+
+def auto_processed_series_ids(state):
+    return {
+        int(x)
+        for x in state.get("auto_processed_series_ids", [])
+        if str(x).isdigit()
+    }
+
+
+def mark_series_auto_processed(state, series_id):
+    processed = auto_processed_series_ids(state)
+    processed.add(int(series_id))
+    state["auto_processed_series_ids"] = sorted(processed)
+
+
+def reconcile_auto_processed_series(state):
+    """Migrate/close every fully consumed automatic series exactly once."""
+    sq = state.get("series_queue", []) or []
+    sc = min(int(state.get("series_cursor", 0)), len(sq))
+    wq = state.get("work_queue", []) or []
+    wc = min(int(state.get("work_cursor", 0)), len(wq))
+
+    loaded = {
+        int(x.get("series_id", 0) or 0)
+        for x in sq[:sc]
+        if int(x.get("series_id", 0) or 0) > 0
+    }
+    unconsumed = {
+        int(x.get("series_id", 0) or 0)
+        for x in wq[wc:]
+        if int(x.get("series_id", 0) or 0) > 0
+    }
+
+    processed = auto_processed_series_ids(state)
+    before = set(processed)
+    processed.update(loaded - unconsumed)
+    state["auto_processed_series_ids"] = sorted(processed)
+
+    if LIVE and processed != before:
+        save_state(state)
+        print(
+            "AUTO ONE-SHOT: permanently closed %d completed series"
+            % len(processed),
+            flush=True
+        )
 
 
 def release_key(release):
@@ -852,48 +1089,79 @@ def append_new_series(state):
 
 
 def load_next_series_episodes(state):
-    """Expand only the next series into episode work when the cursor reaches it."""
+    """Expand the next never-processed series into one automatic work pass."""
     sq = state.get("series_queue", [])
     sc = int(state.get("series_cursor", 0))
-    if sc >= len(sq):
-        return False
+    processed = auto_processed_series_ids(state)
 
-    sref = sq[sc]
-    sid = int(sref["series_id"])
-    try:
-        episodes = get("/episode?seriesId=%d" % sid)
-    except Exception as e:
-        print("WARNING: Could not load:", sref.get("series_title"), e, flush=True)
-        return False
+    while sc < len(sq):
+        sref = sq[sc]
+        sid = int(sref["series_id"])
 
-    entries = [
-        {
-            "series_id": sid,
-            "series_title": sref.get("series_title", ""),
-            "episode_id": int(ep["id"]),
-            "season": int(ep.get("seasonNumber", 0)),
-            "episode": int(ep.get("episodeNumber", 0)),
-        }
-        for ep in sorted(episodes, key=_episode_sort_key)
-        if ep.get("hasFile") and ep.get("episodeFileId")
-    ]
+        if sid in processed:
+            state["series_cursor"] = sc + 1
+            sc += 1
+            if LIVE:
+                save_state(state)
+            print(
+                "AUTO ONE-SHOT SERIES SKIP:",
+                sref.get("series_title"),
+                "-- already processed",
+                flush=True
+            )
+            continue
 
-    state.setdefault("work_queue", []).extend(entries)
-    state["series_cursor"] = sc + 1
-    save_state(state)
-    print("LOADED NEXT SERIES:", sref.get("series_title"), "·", len(entries), "episodes", flush=True)
-    return True
+        try:
+            episodes = get("/episode?seriesId=%d" % sid)
+        except Exception as e:
+            print("WARNING: Could not load:", sref.get("series_title"), e, flush=True)
+            return False
+
+        entries = [
+            {
+                "series_id": sid,
+                "series_title": sref.get("series_title", ""),
+                "episode_id": int(ep["id"]),
+                "season": int(ep.get("seasonNumber", 0)),
+                "episode": int(ep.get("episodeNumber", 0)),
+            }
+            for ep in sorted(episodes, key=_episode_sort_key)
+            if ep.get("hasFile") and ep.get("episodeFileId")
+        ]
+
+        state["series_cursor"] = sc + 1
+
+        if not entries:
+            mark_series_auto_processed(state, sid)
+            processed.add(sid)
+            if LIVE:
+                save_state(state)
+            print(
+                "AUTO ONE-SHOT SERIES COMPLETE:",
+                sref.get("series_title"),
+                "-- no searchable episode files",
+                flush=True
+            )
+            sc += 1
+            continue
+
+        state.setdefault("work_queue", []).extend(entries)
+        if LIVE:
+            save_state(state)
+        print("LOADED NEXT SERIES:", sref.get("series_title"), "·", len(entries), "episodes", flush=True)
+        return True
+
+    return False
 
 
-def item_from_queue_entry(entry, queued_ids, state):
+def item_from_queue_entry(entry, queued_ids, state, ignore_search_history=False):
     """Load metadata only for the next queued episode, never the whole library."""
     episode_id = int(entry["episode_id"])
     if episode_id in queued_ids:
         return None
     hist = state.get("episodes", {}).get(str(episode_id), {})
     cycles = int(hist.get("search_cycles", 0))
-    last_search = hist.get("last_search")
-    if cycles >= 2 or (cycles == 1 and last_search and age_days(last_search) < 180):
+    if not ignore_search_history and (bool(hist.get("auto_processed")) or cycles >= 1):
         return None
     try:
         series = get("/series/%d" % int(entry["series_id"]))
@@ -968,7 +1236,12 @@ def targeted_episode_item(episode_id, queued_ids, state):
         "episode": int(ep.get("episodeNumber", 0)),
     }
 
-    return item_from_queue_entry(entry, queued_ids, state)
+    return item_from_queue_entry(
+        entry,
+        queued_ids,
+        state,
+        ignore_search_history=MANUAL_TARGET_MODE
+    )
 
 
 def targeted_series_items(series_id, queued_ids, state):
@@ -1012,7 +1285,8 @@ def targeted_series_items(series_id, queued_ids, state):
             item = item_from_queue_entry(
                 entry,
                 queued_ids,
-                state
+                state,
+                ignore_search_history=MANUAL_TARGET_MODE
             )
 
             if item is not None:
@@ -1045,6 +1319,8 @@ def targeted_series_items(series_id, queued_ids, state):
 
 
 def next_work_items(state, queued_ids, limit):
+    reconcile_auto_processed_series(state)
+
     if not state.get("queue_initialized") or not state.get("series_queue"):
         print("Creating persistent A-Z series queue...", flush=True)
         initialize_work_queue(state)
@@ -1109,7 +1385,15 @@ def rejection_allowed(rejection):
 
     reason = reason.lower()
 
-    return "existing file meets cutoff" in reason
+    allowed_rejection_substrings = (
+        "existing file meets cutoff",
+        "upgrade for existing episode file",
+    )
+
+    return any(
+        token in reason
+        for token in allowed_rejection_substrings
+    )
 
 
 def sonarr_rejections_ok(release):
@@ -1126,199 +1410,564 @@ def candidate_resolution(release):
     return quality_resolution(release.get("quality"))
 
 
-def evaluate_release(item, release, state):
-    title = str(release.get("title", ""))
+# SONARR POLICY V3C START
 
-    # HARD SAFETY BLOCK:
-    # Never grab executable/script payloads.
+def optimizer_is_torrentleech(release):
+    raw = str(
+        (release or {}).get("indexer")
+        or ""
+    ).lower()
+
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        "",
+        raw
+    )
+
+    return "torrentleech" in normalized
+
+
+def optimizer_release_is_pack(release):
+    release = release or {}
+
+    for field in (
+        "fullSeason",
+        "seasonPack",
+    ):
+        value = release.get(field)
+
+        if (
+            value is True
+            or str(value).strip().lower()
+            in ("1", "true", "yes")
+        ):
+            return True
+
+
+    for field in (
+        "episodeNumbers",
+        "absoluteEpisodeNumbers",
+    ):
+        values = release.get(field)
+
+        if isinstance(
+            values,
+            (list, tuple, set)
+        ):
+            values = {
+                str(x).strip()
+                for x in values
+                if str(x).strip()
+            }
+
+            if len(values) > 1:
+                return True
+
+
+    title = str(
+        release.get("title")
+        or ""
+    )
+
+
+    # Complete Season / Full Season.
+    if re.search(
+        r"(?i)\b(?:complete|full)\s+season\b",
+        title
+    ):
+        return True
+
+
+    # S01 COMPLETE / S01 PACK.
+    if re.search(
+        r"(?i)\bS\d{1,2}\b.*\b(?:complete|pack)\b",
+        title
+    ):
+        return True
+
+
+    # S01 without an episode number is normally a season pack.
+    if (
+        re.search(
+            r"(?i)\bS\d{1,2}\b",
+            title
+        )
+        and not re.search(
+            r"(?i)\bS\d{1,2}E\d{1,3}\b",
+            title
+        )
+    ):
+        return True
+
+
+    # S01E01-E03 / S01E01+E02 / S01E01E02.
+    if re.search(
+        r"(?i)\bS\d{1,2}E\d{1,3}"
+        r"(?:\s*[-+]\s*E?\d{1,3}|E\d{1,3})\b",
+        title
+    ):
+        return True
+
+
+    tokens = re.findall(
+        r"(?i)\bS\d{1,2}E\d{1,3}\b",
+        title
+    )
+
+    if len(
+        {
+            token.upper()
+            for token in tokens
+        }
+    ) > 1:
+        return True
+
+
+    return False
+
+
+
+def evaluate_release(item, release, state):
+    title = str(
+        release.get("title")
+        or ""
+    )
+
+
+    # ========================================================
+    # EXISTING SAFETY GATES
+    # ========================================================
+
     if dangerous_release_title(title):
         return None
+
 
     if not sonarr_rejections_ok(release):
         return None
 
-    if release_recently_attempted(state, release):
+
+    if release_recently_attempted(
+        state,
+        release
+    ):
         return None
 
-    # Require positive seeder evidence before grabbing.
-    # Unknown, missing, invalid or zero seeders are rejected.
-    seeders = release.get("seeders")
+
+    # Smart Optimizer works ONE EPISODE -> ONE FILE.
+    # Never compare a season pack against one episode file.
+    if optimizer_release_is_pack(release):
+
+        print(
+            "    PACK RULE: "
+            "season/multi-episode release | REJECT",
+            flush=True
+        )
+
+        return None
+
 
     try:
-        seeders = int(seeders)
-    except (TypeError, ValueError):
+        seeders = int(
+            release.get("seeders")
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
         return None
+
 
     if seeders < MIN_SEEDERS:
         return None
 
-    new_res = candidate_resolution(release)
+
+    # ========================================================
+    # RESOLUTION
+    # ========================================================
+
+    new_res = candidate_resolution(
+        release
+    )
 
     if not new_res:
         return None
 
-    old_res = item["resolution"]
-    target = item["target_resolution"]
 
-    # NEVER exceed profile target.
-    if new_res > target:
-        return None
+    new_res = int(new_res)
 
-    # NEVER resolution downgrade.
-    if new_res < old_res:
-        return None
+    old_res = int(
+        item["resolution"]
+    )
 
-    new_size = mib(release.get("size", 0))
+    profile_id = int(
+        item.get("profile_id")
+        or 0
+    )
 
-    if new_size <= 0:
-        return None
 
-    codec = codec_from_text(title)
+    # --------------------------------------------------------
+    # SPECIAL 720p RULE
+    #
+    # 720 -> 1080 YES
+    # 720 -> 720  NO
+    # 720 -> 2160 NO
+    # --------------------------------------------------------
 
-    # HARD COMPATIBILITY RULE:
-    # AV1 replacements are disabled because the configured playback
-    # environment is not guaranteed to support AV1.
-    if codec == "av1":
-        print("    CODEC RULE: AV1 | REJECT: AV1 not allowed", flush=True)
-        return None
+    if old_res == 720:
 
-    candidate_audio = audio_channels_from_text(title)
-    candidate_atmos = atmos_from_text(title)
+        if new_res != 1080:
 
-    # Atmos is a preference, not a hard preservation requirement.
-    # Losing Atmos is allowed as long as the channel-layout rule below passes.
-    dynamic_range = dynamic_range_from_text(title)
-    candidate_hdr = dynamic_range in ("HDR", "DV_HDR")
+            print(
+                "    RESOLUTION RULE: "
+                "720p may ONLY become 1080p | REJECT",
+                flush=True
+            )
 
-    # HARD RULE:
-    # Dolby Vision without an explicit HDR fallback is rejected.
-    if not dynamic_range_allowed(
-        item.get("dynamic_range", "HDR" if item.get("hdr") else "SDR_UNKNOWN"),
-        dynamic_range
-    ):
+            return None
+
+
+    # Other old sub-1080 resolutions are left alone.
+    elif old_res < 1080:
+
         print(
-            "    HDR/DV RULE: current=%s candidate=%s | REJECT"
+            "    RESOLUTION RULE: "
+            "sub-1080 source is not 720p | REJECT",
+            flush=True
+        )
+
+        return None
+
+
+    # --------------------------------------------------------
+    # UHD PROFILE
+    #
+    # Current 1080 -> candidate 2160
+    # Current 2160 -> candidate 2160
+    # --------------------------------------------------------
+
+    elif profile_id == UHD_PROFILE_ID:
+
+        if new_res != 2160:
+
+            print(
+                "    RESOLUTION RULE: "
+                "UHD profile requires 2160p | REJECT",
+                flush=True
+            )
+
+            return None
+
+
+    # --------------------------------------------------------
+    # NORMAL PROFILE
+    #
+    # 1080 stays 1080.
+    # --------------------------------------------------------
+
+    else:
+
+        if new_res != old_res:
+
+            print(
+                "    RESOLUTION RULE: "
+                "%dp must remain %dp | REJECT"
+                % (
+                    old_res,
+                    old_res,
+                ),
+                flush=True
+            )
+
+            return None
+
+
+    # ========================================================
+    # CODEC
+    # ========================================================
+
+    codec = codec_from_text(
+        title
+    )
+
+
+    # NO AV1 for series.
+    if codec == "av1":
+
+        print(
+            "    CODEC RULE: AV1 | REJECT",
+            flush=True
+        )
+
+        return None
+
+
+    # ========================================================
+    # HDR / DV / ATMOS
+    # ========================================================
+
+    dynamic_range = (
+        dynamic_range_from_text(
+            title
+        )
+    )
+
+    candidate_audio = (
+        audio_channels_from_text(
+            title
+        )
+    )
+
+    candidate_atmos = (
+        atmos_from_text(
+            title
+        )
+    )
+
+    candidate_hdr = (
+        dynamic_range
+        in (
+            "HDR",
+            "DV_HDR",
+        )
+    )
+
+
+    # DV must also advertise HDR fallback.
+    if dynamic_range == "DV_ONLY":
+
+        print(
+            "    HDR/DV RULE: "
+            "DV without HDR fallback | REJECT",
+            flush=True
+        )
+
+        return None
+
+
+    # Normal 1080:
+    # HDR / Atmos do NOT get priority over file size.
+    #
+    # UHD:
+    # require at least HDR.
+    if (
+        profile_id == UHD_PROFILE_ID
+        and new_res == 2160
+        and dynamic_range
+        not in (
+            "HDR",
+            "DV_HDR",
+        )
+    ):
+
+        print(
+            "    UHD RULE: "
+            "2160p must advertise HDR | REJECT",
+            flush=True
+        )
+
+        return None
+
+
+    # ========================================================
+    # SIZE
+    # ========================================================
+
+    old_size = float(
+        item["size_mib"]
+    )
+
+    new_size = float(
+        mib(
+            release.get(
+                "size",
+                0
+            )
+        )
+    )
+
+
+    if (
+        old_size <= 0
+        or new_size <= 0
+    ):
+        return None
+
+
+    EPS = 0.000001
+
+
+    # ========================================================
+    # THE ONLY UPSIZE EXCEPTION:
+    #
+    #         720p -> 1080p
+    #
+    # Up to +40%.
+    #
+    # No minimum saving requirement here because this is a
+    # quality upgrade rather than a same-resolution downsize.
+    # ========================================================
+
+    if (
+        old_res == 720
+        and new_res == 1080
+    ):
+
+        maximum = (
+            old_size
+            * 1.40
+        )
+
+
+        if new_size > maximum + EPS:
+
+            growth = (
+                (
+                    new_size
+                    - old_size
+                )
+                / old_size
+                * 100.0
+            )
+
+            print(
+                "    720->1080 SIZE RULE: "
+                "%.2f%% growth > 40%% | REJECT"
+                % growth,
+                flush=True
+            )
+
+            return None
+
+
+        saving = (
+            (
+                old_size
+                - new_size
+            )
+            / old_size
+            * 100.0
+        )
+
+
+        print(
+            "    720->1080 SIZE RULE: "
+            "%.1f -> %.1f MiB; "
+            "maximum %.1f MiB | PASS"
             % (
-                item.get("dynamic_range", "HDR" if item.get("hdr") else "SDR_UNKNOWN"),
-                dynamic_range
+                old_size,
+                new_size,
+                maximum,
             ),
             flush=True
         )
-        return None
 
-    old_size = item["size_mib"]
 
-    if old_size <= 0:
-        return None
-
-    saving = (
-        (old_size - new_size)
-        / old_size
-        * 100.0
-    )
-
-    # Tiny tolerance prevents floating-point conversion noise from rejecting
-    # a candidate exactly on a configured boundary.
-    SAVING_EPSILON = 1e-6
-
-    # LOW-RESOLUTION UPGRADE RULE -- SONARR ONLY
-    #
-    # Existing SD/480p/720p episodes may upgrade toward the resolution wanted
-    # by their Sonarr profile. The replacement may be smaller, equal-sized,
-    # or at most 40% larger than the existing episode.
-    #
-    # Example:
-    #   720p 1.2 GiB -> 1080p 700 MiB  = PASS
-    #   720p 1.2 GiB -> 1080p 1.8 GiB  = PASS
-    #   720p 1.2 GiB -> 1080p 3.5 GiB  = REJECT
-    #
-    # This exception does NOT apply to 1080p -> 2160p.
-    is_lowres_upgrade = (
-        old_res < 1080
-        and new_res > old_res
-        and new_res <= target
-    )
-
-    if is_lowres_upgrade:
-        MAX_LOWRES_UPGRADE_INCREASE_PERCENT = 40.0
-        max_upgrade_size = old_size * (
-            1.0 + MAX_LOWRES_UPGRADE_INCREASE_PERCENT / 100.0
+        reason = (
+            "720p to 1080p upgrade"
         )
 
-        increase = (
-            ((new_size - old_size) / old_size) * 100.0
-        )
-
-        if new_size > max_upgrade_size + SAVING_EPSILON:
-            print(
-                "    LOW-RES UPGRADE SIZE RULE: %.3f%% size change | "
-                "maximum +%.1f%% | REJECT"
-                % (increase, MAX_LOWRES_UPGRADE_INCREASE_PERCENT),
-                flush=True
-            )
-            return None
-
-        print(
-            "    LOW-RES UPGRADE SIZE RULE: %.3f%% size change | "
-            "maximum +%.1f%% | PASS"
-            % (increase, MAX_LOWRES_UPGRADE_INCREASE_PERCENT),
-            flush=True
-        )
 
     else:
-        if saving < MIN_SAVING_PERCENT - SAVING_EPSILON:
+
+        # ====================================================
+        # EVERYTHING ELSE MUST SHRINK.
+        #
+        # 1080 -> 1080
+        # 1080 -> 2160
+        # 2160 -> 2160
+        #
+        # Same size = NO.
+        # Bigger     = NO.
+        # ====================================================
+
+        if new_size >= old_size - EPS:
+
             print(
-                "    SIZE RULE: %.3f%% saving | allowed %.1f%%-%.1f%% | REJECT: below minimum"
-                % (saving, MIN_SAVING_PERCENT, MAX_SAVING_PERCENT),
+                "    ABSOLUTE SIZE RULE: "
+                "%.1f MiB is not smaller than "
+                "%.1f MiB | REJECT"
+                % (
+                    new_size,
+                    old_size,
+                ),
                 flush=True
             )
+
             return None
 
-        if saving > MAX_SAVING_PERCENT + SAVING_EPSILON:
+
+        saving = (
+            (
+                old_size
+                - new_size
+            )
+            / old_size
+            * 100.0
+        )
+
+
+        # User-configured minimum remains respected.
+        if (
+            saving
+            < MIN_SAVING_PERCENT
+            - EPS
+        ):
+
             print(
-                "    SIZE RULE: %.3f%% saving | allowed %.1f%%-%.1f%% | REJECT: above maximum"
-                % (saving, MIN_SAVING_PERCENT, MAX_SAVING_PERCENT),
+                "    SIZE RULE: "
+                "%.2f%% saving below %.1f%% | REJECT"
+                % (
+                    saving,
+                    MIN_SAVING_PERCENT,
+                ),
                 flush=True
             )
+
             return None
+
+
+        # HARD SAFETY CEILING:
+        #
+        # Even if the UI/config is accidentally set above 40,
+        # Sonarr Smart Optimizer will never downsize more than 40%.
+        effective_max_saving = min(
+            float(MAX_SAVING_PERCENT),
+            40.0
+        )
+
+
+        if (
+            saving
+            > effective_max_saving
+            + EPS
+        ):
+
+            print(
+                "    SIZE RULE: "
+                "%.2f%% saving above hard/effective "
+                "%.1f%% maximum | REJECT"
+                % (
+                    saving,
+                    effective_max_saving,
+                ),
+                flush=True
+            )
+
+            return None
+
 
         print(
-            "    SIZE RULE: %.3f%% saving | allowed %.1f%%-%.1f%% | PASS"
-            % (saving, MIN_SAVING_PERCENT, MAX_SAVING_PERCENT),
+            "    SIZE RULE: "
+            "%.2f%% saving | PASS"
+            % saving,
             flush=True
         )
 
-    # Audio protection.
-    #
-    # If current file has known channel count, candidate must
-    # ALSO tell us its channel count and it cannot be lower.
-    old_audio = item["audio_channels"]
 
-    if old_audio is not None:
-        if candidate_audio is None:
-            print(
-                "    AUDIO RULE: current=%.1fch candidate=unknown | REJECT"
-                % old_audio,
-                flush=True
-            )
-            return None
+        reason = (
+            "strictly smaller replacement"
+        )
 
-        # HARD AUDIO RULE:
-        # Never replace multichannel audio (5.1/7.1/etc.) with stereo.
-        # Moving between multichannel layouts, e.g. 7.1 -> 5.1, is allowed.
-        if old_audio > 2.0 and candidate_audio <= 2.0:
-            print(
-                "    AUDIO RULE: multichannel -> stereo | REJECT",
-                flush=True
-            )
-            return None
-
-    # HDR/DV protection at BOTH 1080p and 2160p.
-    #
-    # Existing HDR/DV -> SDR/unknown = NEVER for space saving.
-    #
-    # Existing SDR -> HDR/DV is allowed.
-    
 
     return {
         "release": release,
@@ -1330,83 +1979,195 @@ def evaluate_release(item, release, state):
         "hdr": candidate_hdr,
         "dynamic_range": dynamic_range,
         "saving_percent": saving,
-        "reason": "smaller same-resolution file"
+        "reason": reason,
+        "torrentleech": (
+            optimizer_is_torrentleech(
+                release
+            )
+        ),
     }
+
 
 
 def choose_best(item, releases, state):
     valid = []
 
+
     for release in releases:
-        result = evaluate_release(
+
+        candidate = evaluate_release(
             item,
             release,
             state
         )
 
-        if result:
-            valid.append(result)
+        if candidate:
+
+            valid.append(
+                candidate
+            )
+
 
     if not valid:
         return None
 
-    old_res = item["resolution"]
 
-    # A valid higher-resolution candidate still wins for the UHD profile.
-    # Quality preferences below only rank candidates inside that resolution
-    # tier and therefore do not change the existing resolution policy.
-    higher = [
-        x for x in valid
-        if x["resolution"] > old_res
+    # ========================================================
+    # TORRENTLEECH FIRST
+    # ========================================================
+    #
+    # This DOES NOT create another Sonarr search.
+    #
+    # We use the SAME /release result set.
+    #
+    # If at least one VALID TorrentLeech release exists,
+    # every other indexer is ignored.
+
+    torrentleech = [
+        candidate
+        for candidate in valid
+        if candidate.get(
+            "torrentleech"
+        )
     ]
 
-    pool = higher if higher else [
-        x for x in valid
-        if x["resolution"] == old_res
-    ]
+
+    if torrentleech:
+
+        pool = torrentleech
+
+        print(
+            "    INDEXER POLICY: "
+            "TorrentLeech valid pool found",
+            flush=True
+        )
+
+
+    else:
+
+        pool = valid
+
+        print(
+            "    INDEXER POLICY: "
+            "no valid TorrentLeech; "
+            "using fallback indexers",
+            flush=True
+        )
+
+
+    old_res = int(
+        item["resolution"]
+    )
+
+    profile_id = int(
+        item.get("profile_id")
+        or 0
+    )
+
+
+    # Defensive resolution filter.
+    if old_res == 720:
+
+        pool = [
+            x
+            for x in pool
+            if x["resolution"] == 1080
+        ]
+
+
+    elif profile_id == UHD_PROFILE_ID:
+
+        pool = [
+            x
+            for x in pool
+            if x["resolution"] == 2160
+        ]
+
+
+    else:
+
+        pool = [
+            x
+            for x in pool
+            if x["resolution"] == old_res
+        ]
+
 
     if not pool:
         return None
 
-    # All candidates here already passed the hard safety gates.
-    #
-    # Preference order for already-valid Sonarr candidates:
-    #   1. Dynamic range: DV+HDR > HDR > SDR/unknown
-    #   2. Atmos when available (preference only, never mandatory)
-    #   3. Multichannel audio preference
-    #   4. Smaller file when preferred quality is otherwise equal
-    #   5. x265/HEVC
-    #
-    # AUDIO POLICY -- SONARR ONLY:
-    #   stereo -> stereo/5.1/7.1 = allowed
-    #   5.1/7.1 -> stereo       = NEVER
-    #   7.1 -> 5.1              = allowed
-    #   Atmos -> non-Atmos      = allowed
-    #   non-Atmos -> Atmos      = preferred when otherwise suitable
-    #
-    # LOW-RESOLUTION POLICY -- SONARR ONLY:
-    # Current resolution below 1080p may upgrade toward the profile target.
-    # Candidate may be smaller, equal-size, or at most +40% larger.
-    dr_rank = {
-        "DV_HDR": 3,
-        "HDR": 2,
-        "SDR_UNKNOWN": 1
-    }
 
-    pool.sort(key=lambda x: (
-        -dr_rank.get(x.get("dynamic_range", "SDR_UNKNOWN"), 0),
-        -int(bool(x.get("atmos", False))),
-        -(x.get("audio") or 0),
-        x["size_mib"],
-        0 if x["codec"] == "x265" else 1
-    ))
+    # ========================================================
+    # 4K PROFILE
+    # ========================================================
+    #
+    # Within the primary indexer pool:
+    #
+    # 1. DV + HDR
+    # 2. HDR
+    # 3. Atmos
+    # 4. Smallest file
+    #
+    # Every release has ALREADY passed strict size safety.
+
+    if (
+        profile_id == UHD_PROFILE_ID
+        and pool[0]["resolution"] == 2160
+    ):
+
+        dr_rank = {
+            "DV_HDR": 2,
+            "HDR": 1,
+        }
+
+
+        pool.sort(
+            key=lambda x: (
+                -dr_rank.get(
+                    x.get(
+                        "dynamic_range",
+                        "SDR_UNKNOWN"
+                    ),
+                    0
+                ),
+                -int(
+                    bool(
+                        x.get("atmos")
+                    )
+                ),
+                x["size_mib"],
+                0
+                if x["codec"] == "x265"
+                else 1,
+            )
+        )
+
+
+    # ========================================================
+    # NORMAL 1080 / 720->1080
+    # ========================================================
+    #
+    # STORAGE IS KING.
+    #
+    # HDR, Atmos and audio channel count may NOT make a larger
+    # release win.
+
+    else:
+
+        pool.sort(
+            key=lambda x: (
+                x["size_mib"],
+                0
+                if x["codec"] == "x265"
+                else 1,
+            )
+        )
+
 
     return pool[0]
 
 
-# ============================================================
-# OUTPUT
-# ============================================================
+# SONARR POLICY V3C END
 
 def describe_item(number, item):
     audio = (
@@ -1507,7 +2268,7 @@ def main():
 
     print("Daily interactive-search budget:", DAILY_SEARCH_BUDGET + DAILY_EXTRA_BUDGET, "(base %d + today override %d)" % (DAILY_SEARCH_BUDGET, DAILY_EXTRA_BUDGET))
     print("Same-resolution saving window: %.1f%% to %.1f%%" % (MIN_SAVING_PERCENT, MAX_SAVING_PERCENT))
-    print("Low-resolution upgrade rule: current <1080p may upgrade toward profile target with max +40% size growth")
+    print("Resolution rule: ONLY 720p->1080p may grow up to +40%; all 1080p/2160p replacements must shrink")
     print()
 
     used = searches_used_today(state)
@@ -1663,8 +2424,10 @@ def main():
             if LIVE:
                 if not MANUAL_TARGET_MODE:
                     increment_search_count(state)
-                    mark_episode_searched(state, episode_id)
 
+                # A real successful /release search is one-shot forever for
+                # automatic runs. Explicit Manual Optimizer retries bypass it.
+                mark_episode_searched(state, episode_id)
                 save_state(state)
         except Exception as e:
             errors += 1
@@ -1699,8 +2462,273 @@ def main():
             print()
             continue
 
+        # SONARR V3C FINAL FILE GUARD START
+        #
+        # Search/evaluation can take time.
+        # Immediately before /release, prove the episode still has
+        # the exact file that choose_best() evaluated.
+
         try:
-            post("/release", choice["release"])
+
+            fresh_ep = get(
+                "/episode/%d"
+                % episode_id
+            ) or {}
+
+
+            original_file = (
+                item.get("file")
+                or {}
+            )
+
+
+            expected_id = int(
+                original_file.get("id")
+                or 0
+            )
+
+            fresh_id = int(
+                fresh_ep.get(
+                    "episodeFileId"
+                )
+                or 0
+            )
+
+
+            if (
+                not fresh_ep.get("hasFile")
+                or expected_id <= 0
+                or fresh_id != expected_id
+            ):
+
+                print(
+                    "    FINAL FILE GUARD: "
+                    "episodeFileId changed | SKIP",
+                    flush=True
+                )
+
+                print()
+                continue
+
+
+            fresh_file = get(
+                "/episodefile/%d"
+                % fresh_id
+            ) or {}
+
+
+            expected_size = int(
+                original_file.get("size")
+                or 0
+            )
+
+            fresh_size = int(
+                fresh_file.get("size")
+                or 0
+            )
+
+
+            if (
+                expected_size <= 0
+                or fresh_size != expected_size
+            ):
+
+                print(
+                    "    FINAL FILE GUARD: "
+                    "file size changed | SKIP",
+                    flush=True
+                )
+
+                print()
+                continue
+
+
+            fresh_resolution = int(
+                file_resolution(
+                    fresh_file
+                )
+                or 0
+            )
+
+
+            if (
+                fresh_resolution
+                != int(
+                    item["resolution"]
+                )
+            ):
+
+                print(
+                    "    FINAL FILE GUARD: "
+                    "resolution changed | SKIP",
+                    flush=True
+                )
+
+                print()
+                continue
+
+
+            fresh_series = get(
+                "/series/%d"
+                % int(
+                    item["series_id"]
+                )
+            ) or {}
+
+
+            if int(
+                fresh_series.get(
+                    "qualityProfileId"
+                )
+                or 0
+            ) != int(
+                item["profile_id"]
+            ):
+
+                print(
+                    "    FINAL FILE GUARD: "
+                    "quality profile changed | SKIP",
+                    flush=True
+                )
+
+                print()
+                continue
+
+
+        except Exception as exc:
+
+            print(
+                "    FINAL FILE GUARD: "
+                "revalidation failed | SKIP:",
+                exc,
+                flush=True
+            )
+
+            print()
+            continue
+
+        # SONARR V3C FINAL FILE GUARD END
+
+        try:
+            approved_release = choice["release"]
+            approved_title = str(
+                approved_release.get("title") or ""
+            ).strip()
+            source_indexer = str(
+                approved_release.get("indexer") or ""
+            ).strip()
+            tracker_policy = tracker_policy_from_indexer(
+                source_indexer
+            )
+            pre_grab_queue_ids = sorted(
+                queue_ids_for_episode(
+                    episode_id
+                )
+            )
+
+            state.setdefault(
+                "tracker_jobs",
+                {}
+            )
+            tracker_key = str(
+                episode_id
+            )
+
+            if state["tracker_jobs"].get(
+                tracker_key
+            ):
+                raise RuntimeError(
+                    "Tracker retention job already exists "
+                    "for episode %d"
+                    % int(episode_id)
+                )
+
+            state["tracker_jobs"][
+                tracker_key
+            ] = {
+                "media_type": "sonarr",
+                "media_id": int(episode_id),
+                "series_id": int(
+                    item.get("series_id") or 0
+                ),
+                "approved_title": approved_title,
+                "source_indexer": source_indexer,
+                "tracker_policy": tracker_policy,
+                "policy_source": (
+                    "indexer"
+                    if tracker_policy
+                    else "unresolved"
+                ),
+                "desired_label": (
+                    "torrentleech-tv"
+                    if tracker_policy == "keep_seed"
+                    else ""
+                ),
+                "pre_grab_queue_ids": (
+                    pre_grab_queue_ids
+                ),
+                "created": now_ts(),
+                "status": "grabbing",
+            }
+
+            save_state(state)
+
+            try:
+                post(
+                    "/release",
+                    approved_release
+                )
+            except Exception:
+                state.setdefault(
+                    "tracker_jobs",
+                    {}
+                ).pop(
+                    tracker_key,
+                    None
+                )
+                save_state(state)
+                raise
+
+            state["tracker_jobs"][
+                tracker_key
+            ]["status"] = "grabbed"
+            state["tracker_jobs"][
+                tracker_key
+            ]["grabbed_at"] = now_ts()
+
+            ownership = bind_grabbed_download(
+                episode_id,
+                approved_release,
+                pre_grab_queue_ids,
+            )
+
+            if ownership:
+                state["tracker_jobs"][
+                    tracker_key
+                ]["download_id"] = (
+                    ownership["download_id"]
+                )
+                state["tracker_jobs"][
+                    tracker_key
+                ]["queue_id"] = (
+                    ownership["queue_id"]
+                )
+                state["tracker_jobs"][
+                    tracker_key
+                ]["bound_at"] = now_ts()
+
+                print(
+                    "    OWNERSHIP BOUND:",
+                    ownership["download_id"],
+                    flush=True
+                )
+            else:
+                print(
+                    "    OWNERSHIP PENDING: tracker worker "
+                    "will bind the Sonarr queue entry.",
+                    flush=True
+                )
+
             grabs += 1
 
             if LIVE and TARGET_GRABS > 0:
@@ -1709,15 +2737,37 @@ def main():
                     % (grabs, TARGET_GRABS),
                     flush=True
                 )
-            mark_release_attempted(state, choice["release"])
+
+            mark_release_attempted(
+                state,
+                approved_release
+            )
             save_state(state)
-            print("    LIVE: RELEASE SENT TO SONARR", flush=True)
-            print("    QUALIFYING REPLACEMENTS FOUND: %d" % grabs, flush=True)
-            print("    Existing episode remains until Sonarr successfully downloads and imports replacement.")
+
+            print(
+                "    LIVE: RELEASE SENT TO SONARR",
+                flush=True
+            )
+            print(
+                "    QUALIFYING REPLACEMENTS FOUND: %d"
+                % grabs,
+                flush=True
+            )
+            print(
+                "    Existing episode remains until Sonarr "
+                "successfully downloads and imports replacement."
+            )
+
         except Exception as e:
             errors += 1
             print("    GRAB ERROR:", e, flush=True)
         print()
+
+    if LIVE and MANUAL_TARGET_MODE and TARGET_SERIES_ID > 0 and searches > 0:
+        # If the user manually handled a never-processed series first, do not
+        # later surprise them with another automatic optimizer pass.
+        mark_series_auto_processed(state, TARGET_SERIES_ID)
+        save_state(state)
 
     print("=" * 68)
     print("SUMMARY")
