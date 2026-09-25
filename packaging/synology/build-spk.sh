@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$ROOT/packaging/synology"
 OUT="${1:-$ROOT/dist}"
-VERSION="${VERSION:-2.0.2}"
+VERSION="${VERSION:-2.0.3}"
 RUNTIME_ARCHIVE="${PORTABLE_PYTHON_ARCHIVE:-}"
 
 if [ -z "$RUNTIME_ARCHIVE" ]; then
@@ -57,8 +57,31 @@ find "$STAGE/payload/app" -type d -name __pycache__ -prune -exec rm -rf {} +
 
 chmod 755 "$STAGE/scripts/"*
 
-cp -p "$SRC/pixel128.png" "$STAGE/PACKAGE_ICON.PNG"
-cp -p "$SRC/pixel128.png" "$STAGE/PACKAGE_ICON_256.PNG"
+# DSM 7 expects exact 64x64 and 256x256 package icons.
+# Keep pixel128.png as the canonical source artwork and generate both required sizes.
+python3 - "$SRC/pixel128.png" "$STAGE/PACKAGE_ICON.PNG" "$STAGE/PACKAGE_ICON_256.PNG" <<'PY'
+from pathlib import Path
+from PIL import Image
+import sys
+
+source, small, large = map(Path, sys.argv[1:4])
+
+with Image.open(source) as image:
+    if image.size != (128, 128):
+        raise SystemExit(f"Expected 128x128 source icon, got {image.size}")
+    image = image.convert("RGBA")
+    image.resize((64, 64), Image.Resampling.LANCZOS).save(small, "PNG", optimize=True)
+    image.resize((256, 256), Image.Resampling.LANCZOS).save(large, "PNG", optimize=True)
+
+for path, expected in ((small, (64, 64)), (large, (256, 256))):
+    with Image.open(path) as image:
+        if image.size != expected:
+            raise SystemExit(f"{path.name}: expected {expected}, got {image.size}")
+        if image.mode != "RGBA":
+            raise SystemExit(f"{path.name}: expected RGBA, got {image.mode}")
+
+print("DSM icon validation OK: 64x64 + 256x256")
+PY
 
 tar -C "$STAGE/payload" -czf "$STAGE/package.tgz" .
 rm -rf "$STAGE/payload"
