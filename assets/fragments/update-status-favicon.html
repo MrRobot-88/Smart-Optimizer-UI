@@ -1,0 +1,755 @@
+<!-- SMART UPDATE STATUS + FAVICON START -->
+
+<style>
+#smart-settings-update-pill {
+    position: fixed;
+    top: 82px;
+    right: 24px;
+    z-index: 9998;
+
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+
+    padding: 9px 14px;
+
+    border-radius: 999px;
+    border: 1px solid rgba(76, 215, 168, 0.28);
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(7, 25, 38, 0.92),
+            rgba(8, 35, 50, 0.86)
+        );
+
+    box-shadow:
+        0 10px 32px rgba(0, 0, 0, 0.30),
+        inset 0 1px 0 rgba(255,255,255,0.05);
+
+    color: #dff7ef;
+
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+
+    text-decoration: none;
+
+    backdrop-filter: blur(14px);
+
+    transition:
+        transform .15s ease,
+        border-color .15s ease,
+        box-shadow .15s ease;
+}
+
+
+#smart-settings-update-pill:hover {
+    transform: translateY(-1px);
+
+    border-color:
+        rgba(82, 230, 176, 0.58);
+
+    box-shadow:
+        0 13px 35px rgba(0,0,0,.36),
+        0 0 24px rgba(31,190,141,.12);
+}
+
+
+#smart-settings-update-pill .smart-update-dot {
+    width: 8px;
+    height: 8px;
+
+    border-radius: 50%;
+
+    background: #5ce0af;
+
+    box-shadow:
+        0 0 13px rgba(92,224,175,.70);
+}
+
+
+#smart-settings-update-pill.smart-update-available {
+    border-color:
+        rgba(255, 168, 66, 0.62);
+
+    color: #fff0dc;
+}
+
+
+#smart-settings-update-pill.smart-update-available
+.smart-update-dot {
+    background: #ffad4f;
+
+    box-shadow:
+        0 0 14px rgba(255,173,79,.80);
+}
+
+
+.smart-current-release-button {
+    opacity: .68 !important;
+    cursor: default !important;
+    pointer-events: none !important;
+    filter: saturate(.65);
+}
+
+
+.smart-update-is-available {
+    box-shadow:
+        0 0 22px rgba(44, 222, 159, .16);
+}
+
+
+@media (max-width: 900px) {
+
+    #smart-settings-update-pill {
+        top: 72px;
+        right: 12px;
+
+        max-width: calc(100vw - 24px);
+
+        font-size: 11px;
+    }
+
+}
+</style>
+
+
+<script>
+(function () {
+    "use strict";
+
+
+    function cleanVersion(value) {
+
+        const match = String(
+            value || ""
+        ).match(
+            /v?(\d+)\.(\d+)\.(\d+)/
+        );
+
+
+        if (!match) {
+            return null;
+        }
+
+
+        return {
+            text:
+                match[1]
+                + "."
+                + match[2]
+                + "."
+                + match[3],
+
+            parts: [
+                parseInt(match[1], 10),
+                parseInt(match[2], 10),
+                parseInt(match[3], 10)
+            ]
+        };
+    }
+
+
+    function compareVersions(a, b) {
+
+        if (!a || !b) {
+            return 0;
+        }
+
+
+        for (
+            let i = 0;
+            i < 3;
+            i += 1
+        ) {
+
+            if (
+                a.parts[i]
+                > b.parts[i]
+            ) {
+                return 1;
+            }
+
+
+            if (
+                a.parts[i]
+                < b.parts[i]
+            ) {
+                return -1;
+            }
+        }
+
+
+        return 0;
+    }
+
+
+    function elementsWithExactText(
+        root,
+        wanted
+    ) {
+
+        const wantedUpper = String(
+            wanted
+        ).trim().toUpperCase();
+
+
+        return Array.from(
+            root.querySelectorAll("*")
+        ).filter(
+            function (el) {
+
+                if (
+                    el.children.length !== 0
+                ) {
+                    return false;
+                }
+
+
+                return String(
+                    el.textContent || ""
+                ).trim().toUpperCase()
+                === wantedUpper;
+            }
+        );
+    }
+
+
+    function versionNearLabel(
+        root,
+        label
+    ) {
+
+        const labels =
+            elementsWithExactText(
+                root,
+                label
+            );
+
+
+        if (!labels.length) {
+            return null;
+        }
+
+
+        let node = labels[0];
+
+
+        for (
+            let depth = 0;
+            depth < 6 && node;
+            depth += 1
+        ) {
+
+            const match =
+                cleanVersion(
+                    node.textContent
+                );
+
+
+            if (match) {
+                return match;
+            }
+
+
+            node = node.parentElement;
+        }
+
+
+        return null;
+    }
+
+
+    function findTextElement(
+        root,
+        text
+    ) {
+
+        const wanted =
+            String(text)
+            .trim()
+            .toLowerCase();
+
+
+        return Array.from(
+            root.querySelectorAll(
+                "button, a, span, div, strong"
+            )
+        ).find(
+            function (el) {
+
+                return String(
+                    el.textContent || ""
+                ).trim().toLowerCase()
+                === wanted;
+            }
+        ) || null;
+    }
+
+
+    function findDownloadButton(
+        root
+    ) {
+
+        const candidates =
+            Array.from(
+                root.querySelectorAll(
+                    "button, a, input[type=submit]"
+                )
+            );
+
+
+        return candidates.find(
+            function (el) {
+
+                const text =
+                    String(
+                        el.textContent
+                        || el.value
+                        || ""
+                    ).trim().toLowerCase();
+
+
+                return (
+                    text === "download latest"
+                    || text.indexOf(
+                        "install v"
+                    ) === 0
+                    || text.indexOf(
+                        "update to v"
+                    ) === 0
+                    || text ===
+                        "you're on latest version"
+                );
+            }
+        ) || null;
+    }
+
+
+    function setElementText(
+        element,
+        value
+    ) {
+
+        if (!element) {
+            return;
+        }
+
+
+        if (
+            element.tagName
+            === "INPUT"
+        ) {
+            element.value =
+                value;
+        }
+        else {
+            element.textContent =
+                value;
+        }
+    }
+
+
+    function updateUpdatesPage() {
+
+        const installed =
+            versionNearLabel(
+                document,
+                "INSTALLED VERSION"
+            );
+
+
+        const latest =
+            versionNearLabel(
+                document,
+                "LATEST RELEASE"
+            );
+
+
+        if (
+            !installed
+            || !latest
+        ) {
+            return;
+        }
+
+
+        const comparison =
+            compareVersions(
+                latest,
+                installed
+            );
+
+
+        const button =
+            findDownloadButton(
+                document
+            );
+
+
+        const upToDate =
+            findTextElement(
+                document,
+                "Up to date"
+            );
+
+
+        const updateAvailable =
+            findTextElement(
+                document,
+                "Update available"
+            );
+
+
+        if (
+            comparison <= 0
+        ) {
+
+            if (button) {
+
+                setElementText(
+                    button,
+                    "You're on latest version"
+                );
+
+
+                button.classList.add(
+                    "smart-current-release-button"
+                );
+
+
+                button.classList.remove(
+                    "smart-update-is-available"
+                );
+
+
+                if (
+                    "disabled"
+                    in button
+                ) {
+                    button.disabled =
+                        true;
+                }
+
+
+                button.setAttribute(
+                    "aria-disabled",
+                    "true"
+                );
+            }
+
+
+            if (updateAvailable) {
+
+                setElementText(
+                    updateAvailable,
+                    "Up to date"
+                );
+            }
+
+
+            return;
+        }
+
+
+        if (button) {
+
+            setElementText(
+                button,
+                "Install v"
+                + latest.text
+            );
+
+
+            button.classList.remove(
+                "smart-current-release-button"
+            );
+
+
+            button.classList.add(
+                "smart-update-is-available"
+            );
+
+
+            if (
+                "disabled"
+                in button
+            ) {
+                button.disabled =
+                    false;
+            }
+
+
+            button.removeAttribute(
+                "aria-disabled"
+            );
+        }
+
+
+        if (upToDate) {
+
+            setElementText(
+                upToDate,
+                "Update available"
+            );
+        }
+    }
+
+
+    function parseVersionsFromDocument(
+        doc
+    ) {
+
+        return {
+            installed:
+                versionNearLabel(
+                    doc,
+                    "INSTALLED VERSION"
+                ),
+
+            latest:
+                versionNearLabel(
+                    doc,
+                    "LATEST RELEASE"
+                )
+        };
+    }
+
+
+    function makeSettingsUpdatePill(
+        latest,
+        available
+    ) {
+
+        let pill =
+            document.getElementById(
+                "smart-settings-update-pill"
+            );
+
+
+        if (!pill) {
+
+            pill =
+                document.createElement(
+                    "a"
+                );
+
+
+            pill.id =
+                "smart-settings-update-pill";
+
+
+            pill.href =
+                "/updates";
+
+
+            pill.innerHTML =
+                '<span class="smart-update-dot"></span>'
+                + '<span class="smart-update-label">'
+                + 'Updates'
+                + '</span>';
+
+
+            document.body.appendChild(
+                pill
+            );
+        }
+
+
+        const label =
+            pill.querySelector(
+                ".smart-update-label"
+            );
+
+
+        if (available) {
+
+            pill.classList.add(
+                "smart-update-available"
+            );
+
+
+            label.textContent =
+                "Updates · New update available v"
+                + latest.text;
+        }
+        else {
+
+            pill.classList.remove(
+                "smart-update-available"
+            );
+
+
+            label.textContent =
+                "Updates · Up to date";
+        }
+    }
+
+
+    async function updateSettingsPage() {
+
+        try {
+
+            const response =
+                await fetch(
+                    "/updates?_settings_check="
+                    + Date.now(),
+                    {
+                        method: "GET",
+                        credentials:
+                            "same-origin",
+                        cache:
+                            "no-store"
+                    }
+                );
+
+
+            if (!response.ok) {
+                throw new Error(
+                    "HTTP "
+                    + response.status
+                );
+            }
+
+
+            const html =
+                await response.text();
+
+
+            const doc =
+                new DOMParser()
+                .parseFromString(
+                    html,
+                    "text/html"
+                );
+
+
+            const versions =
+                parseVersionsFromDocument(
+                    doc
+                );
+
+
+            if (
+                !versions.installed
+                || !versions.latest
+            ) {
+                throw new Error(
+                    "Could not read update versions"
+                );
+            }
+
+
+            const available =
+                compareVersions(
+                    versions.latest,
+                    versions.installed
+                ) > 0;
+
+
+            makeSettingsUpdatePill(
+                versions.latest,
+                available
+            );
+        }
+        catch (error) {
+
+            console.debug(
+                "Smart Optimizer update status:",
+                error
+            );
+
+
+            let pill =
+                document.getElementById(
+                    "smart-settings-update-pill"
+                );
+
+
+            if (!pill) {
+
+                pill =
+                    document.createElement(
+                        "a"
+                    );
+
+
+                pill.id =
+                    "smart-settings-update-pill";
+
+
+                pill.href =
+                    "/updates";
+
+
+                pill.innerHTML =
+                    '<span class="smart-update-dot"></span>'
+                    + '<span class="smart-update-label">'
+                    + 'Updates'
+                    + '</span>';
+
+
+                document.body.appendChild(
+                    pill
+                );
+            }
+
+
+            const label =
+                pill.querySelector(
+                    ".smart-update-label"
+                );
+
+
+            if (label) {
+
+                label.textContent =
+                    "Updates · Check status";
+            }
+        }
+    }
+
+
+    function bootSmartUpdateUI() {
+
+        const path =
+            window.location.pathname;
+
+
+        if (
+            path === "/updates"
+        ) {
+
+            updateUpdatesPage();
+        }
+
+
+        if (
+            path === "/settings"
+        ) {
+
+            updateSettingsPage();
+        }
+    }
+
+
+    if (
+        document.readyState
+        === "loading"
+    ) {
+
+        document.addEventListener(
+            "DOMContentLoaded",
+            bootSmartUpdateUI
+        );
+    }
+    else {
+
+        bootSmartUpdateUI();
+    }
+
+})();
+</script>
+
+<!-- SMART UPDATE STATUS + FAVICON END -->

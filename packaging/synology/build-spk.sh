@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$ROOT/packaging/synology"
 OUT="${1:-$ROOT/dist}"
-VERSION="${VERSION:-2.0.3}"
+VERSION="${VERSION:-2.0.4}"
 RUNTIME_ARCHIVE="${PORTABLE_PYTHON_ARCHIVE:-}"
 
 if [ -z "$RUNTIME_ARCHIVE" ]; then
@@ -38,6 +38,7 @@ cp -a "$SRC/conf/." "$STAGE/conf/"
 cp -p "$ROOT/smart-optimizer-ui.py" "$STAGE/payload/app/smart-optimizer-ui.py"
 cp -p "$ROOT/radarr-smart-optimizer.py" "$STAGE/payload/app/radarr-smart-optimizer.py"
 cp -p "$ROOT/sonarr-smart-optimizer.py" "$STAGE/payload/app/sonarr-smart-optimizer.py"
+cp -a "$ROOT/assets" "$STAGE/payload/app/assets"
 
 echo "Extracting bundled portable Python..."
 tar -xzf "$RUNTIME_ARCHIVE" -C "$STAGE/payload/runtime"

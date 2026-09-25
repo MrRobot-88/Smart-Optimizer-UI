@@ -1,0 +1,524 @@
+<!-- SMART ADMIN UPDATE MODE START -->
+
+<script>
+(function () {
+    "use strict";
+
+    /*
+     * This NAS is the Smart Optimizer development/master instance.
+     *
+     * GitHub Releases are downstream releases made FROM this UI.
+     * Therefore a public release must never be offered as an
+     * "upgrade" over the development source that created it.
+     *
+     * Packaged SPK builds can disable this by setting:
+     *
+     *     window.SMART_OPTIMIZER_PACKAGE_BUILD = true
+     *
+     * in their generated release copy.
+     */
+
+    const SMART_ADMIN_DEVELOPMENT_BUILD = true;
+
+
+    function cleanVersion(value) {
+
+        const match = String(
+            value || ""
+        ).match(
+            /v?(\d+)\.(\d+)\.(\d+)/
+        );
+
+
+        if (!match) {
+            return null;
+        }
+
+
+        return {
+            text:
+                match[1]
+                + "."
+                + match[2]
+                + "."
+                + match[3],
+
+            parts: [
+                parseInt(
+                    match[1],
+                    10
+                ),
+                parseInt(
+                    match[2],
+                    10
+                ),
+                parseInt(
+                    match[3],
+                    10
+                )
+            ]
+        };
+    }
+
+
+    function findExactLeaf(
+        root,
+        wanted
+    ) {
+
+        const text =
+            String(
+                wanted
+            )
+            .trim()
+            .toUpperCase();
+
+
+        return Array.from(
+            root.querySelectorAll("*")
+        ).find(
+            function (element) {
+
+                return (
+                    element.children.length === 0
+                    &&
+                    String(
+                        element.textContent
+                        || ""
+                    )
+                    .trim()
+                    .toUpperCase()
+                    === text
+                );
+            }
+        ) || null;
+    }
+
+
+    function cardValue(
+        label
+    ) {
+
+        const node =
+            findExactLeaf(
+                document,
+                label
+            );
+
+
+        if (!node) {
+            return null;
+        }
+
+
+        let parent =
+            node.parentElement;
+
+
+        for (
+            let depth = 0;
+            depth < 6 && parent;
+            depth += 1
+        ) {
+
+            const version =
+                cleanVersion(
+                    parent.textContent
+                );
+
+
+            if (version) {
+                return {
+                    card:
+                        parent,
+
+                    version:
+                        version
+                };
+            }
+
+
+            parent =
+                parent.parentElement;
+        }
+
+
+        return null;
+    }
+
+
+    function findButton() {
+
+        return Array.from(
+            document.querySelectorAll(
+                "button, a, input[type=submit]"
+            )
+        ).find(
+            function (element) {
+
+                const text =
+                    String(
+                        element.textContent
+                        || element.value
+                        || ""
+                    )
+                    .trim()
+                    .toLowerCase();
+
+
+                return (
+                    text === "download latest"
+                    ||
+                    text.indexOf(
+                        "install v"
+                    ) === 0
+                    ||
+                    text.indexOf(
+                        "update to v"
+                    ) === 0
+                    ||
+                    text ===
+                        "you're on latest version"
+                );
+            }
+        ) || null;
+    }
+
+
+    function setText(
+        element,
+        value
+    ) {
+
+        if (!element) {
+            return;
+        }
+
+
+        if (
+            element.tagName
+            === "INPUT"
+        ) {
+
+            element.value =
+                value;
+
+        }
+        else {
+
+            element.textContent =
+                value;
+
+        }
+    }
+
+
+    function findStatusBadge() {
+
+        return Array.from(
+            document.querySelectorAll(
+                "span, div, strong, button"
+            )
+        ).find(
+            function (element) {
+
+                if (
+                    element.children.length
+                    !== 0
+                ) {
+                    return false;
+                }
+
+
+                const value =
+                    String(
+                        element.textContent
+                        || ""
+                    )
+                    .trim()
+                    .toLowerCase();
+
+
+                return (
+                    value === "up to date"
+                    ||
+                    value ===
+                        "update available"
+                    ||
+                    value ===
+                        "development build"
+                );
+            }
+        ) || null;
+    }
+
+
+    function applyDevelopmentMode() {
+
+        if (
+            !SMART_ADMIN_DEVELOPMENT_BUILD
+        ) {
+            return;
+        }
+
+
+        if (
+            window.location.pathname
+            !== "/updates"
+        ) {
+            return;
+        }
+
+
+        const installed =
+            cardValue(
+                "INSTALLED VERSION"
+            );
+
+
+        const latest =
+            cardValue(
+                "LATEST RELEASE"
+            );
+
+
+        /*
+         * Replace the misleading hardcoded release number
+         * on OUR source-development instance.
+         */
+        if (installed) {
+
+            const cardText =
+                installed.card.innerHTML;
+
+
+            const versionPattern =
+                /v?\d+\.\d+\.\d+/;
+
+
+            if (
+                versionPattern.test(
+                    installed.card.textContent
+                    || ""
+                )
+            ) {
+
+                installed.card.innerHTML =
+                    cardText.replace(
+                        versionPattern,
+                        "Development build"
+                    );
+            }
+        }
+
+
+        const badge =
+            findStatusBadge();
+
+
+        if (badge) {
+
+            setText(
+                badge,
+                "Development build"
+            );
+
+        }
+
+
+        const button =
+            findButton();
+
+
+        if (button) {
+
+            setText(
+                button,
+                "You're on the development build"
+            );
+
+
+            if (
+                "disabled"
+                in button
+            ) {
+                button.disabled =
+                    true;
+            }
+
+
+            button.setAttribute(
+                "aria-disabled",
+                "true"
+            );
+
+
+            button.style.pointerEvents =
+                "none";
+
+
+            button.style.opacity =
+                "0.70";
+
+        }
+
+
+        /*
+         * Add a useful explanation underneath Installed Version.
+         */
+        if (
+            installed
+            &&
+            !document.getElementById(
+                "smart-development-build-note"
+            )
+        ) {
+
+            const note =
+                document.createElement(
+                    "div"
+                );
+
+
+            note.id =
+                "smart-development-build-note";
+
+
+            note.textContent =
+                latest
+                ? (
+                    "Admin/master UI · public release is v"
+                    + latest.version.text
+                )
+                : (
+                    "Admin/master UI"
+                );
+
+
+            note.style.marginTop =
+                "5px";
+
+
+            note.style.fontSize =
+                "11px";
+
+
+            note.style.opacity =
+                "0.72";
+
+
+            installed.card.appendChild(
+                note
+            );
+
+        }
+    }
+
+
+    function patchSettingsPill() {
+
+        if (
+            !SMART_ADMIN_DEVELOPMENT_BUILD
+            ||
+            window.location.pathname
+            !== "/settings"
+        ) {
+            return;
+        }
+
+
+        /*
+         * Wait for the previous update-status script to create
+         * its pill, then replace its wording on the admin NAS.
+         */
+
+        let attempts = 0;
+
+
+        const timer =
+            window.setInterval(
+                function () {
+
+                    attempts += 1;
+
+
+                    const pill =
+                        document.getElementById(
+                            "smart-settings-update-pill"
+                        );
+
+
+                    if (pill) {
+
+                        const label =
+                            pill.querySelector(
+                                ".smart-update-label"
+                            );
+
+
+                        if (label) {
+
+                            label.textContent =
+                                "Updates · Development build";
+
+                        }
+
+
+                        pill.classList.remove(
+                            "smart-update-available"
+                        );
+
+
+                        window.clearInterval(
+                            timer
+                        );
+
+                        return;
+                    }
+
+
+                    if (
+                        attempts >= 40
+                    ) {
+
+                        window.clearInterval(
+                            timer
+                        );
+
+                    }
+
+                },
+                100
+            );
+    }
+
+
+    function boot() {
+
+        applyDevelopmentMode();
+        patchSettingsPill();
+
+    }
+
+
+    if (
+        document.readyState
+        === "loading"
+    ) {
+
+        document.addEventListener(
+            "DOMContentLoaded",
+            boot
+        );
+
+    }
+    else {
+
+        boot();
+
+    }
+
+})();
+</script>
+
+<!-- SMART ADMIN UPDATE MODE END -->
