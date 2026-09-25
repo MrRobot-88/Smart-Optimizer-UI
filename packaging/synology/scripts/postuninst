@@ -1,3 +1,2 @@
 #!/bin/sh
-# DSM owns SYNOPKG_PKGVAR. Do not manually delete persistent optimizer data here.
 exit 0
