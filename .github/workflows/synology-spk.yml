@@ -1,15 +1,18 @@
-name: Build Synology SPK
+name: Build Synology Offline SPK
 
 on:
   push:
     branches: [main]
     tags: ["v*"]
+  pull_request:
+    branches: [main]
     paths:
       - "smart-optimizer-ui.py"
       - "radarr-smart-optimizer.py"
       - "sonarr-smart-optimizer.py"
       - "Dockerfile"
       - "packaging/synology/**"
+      - "RELEASE-NOTES-v2.0.1.md"
       - ".github/workflows/synology-spk.yml"
   workflow_dispatch:
 
@@ -17,8 +20,9 @@ permissions:
   contents: write
 
 jobs:
-  build-spk:
+  build-offline-spk:
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -30,20 +34,50 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
-            echo "value=2.0.0" >> "$GITHUB_OUTPUT"
+            echo "value=2.0.1" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build SPK
+      - name: Build exact offline x86_64 container image
         env:
           VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --tag "smart-optimizer-ui:$VERSION" \
+            .
+
+          docker image inspect "smart-optimizer-ui:$VERSION" >/dev/null
+
+      - name: Export bundled image for DSM preload
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          mkdir -p dist/offline-image
+
+          docker save "smart-optimizer-ui:$VERSION" \
+            | gzip -9 \
+            > dist/offline-image/smart-optimizer-ui-image.tar.gz
+
+          test -s dist/offline-image/smart-optimizer-ui-image.tar.gz
+
+          BYTES="$(wc -c < dist/offline-image/smart-optimizer-ui-image.tar.gz)"
+          echo "Bundled image bytes: $BYTES"
+
+          test "$BYTES" -gt 10000000
+
+      - name: Build full offline SPK
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+          OFFLINE_IMAGE_ARCHIVE: ${{ github.workspace }}/dist/offline-image/smart-optimizer-ui-image.tar.gz
         run: |
           chmod +x packaging/synology/build-spk.sh
           packaging/synology/build-spk.sh dist
 
-      - name: Validate SPK structure
+      - name: Validate offline SPK structure and payload
         run: |
-          SPK="$(find dist -name '*.spk' -print -quit)"
+          SPK="$(find dist -maxdepth 1 -name '*OFFLINE-x86_64.spk' -print -quit)"
           test -n "$SPK"
+
           tar -tf "$SPK" | grep -qx 'INFO'
           tar -tf "$SPK" | grep -qx 'package.tgz'
           tar -tf "$SPK" | grep -qx 'conf/privilege'
@@ -52,20 +86,36 @@ jobs:
           tar -tf "$SPK" | grep -qx 'PACKAGE_ICON.PNG'
           tar -tf "$SPK" | grep -qx 'PACKAGE_ICON_256.PNG'
 
-      - name: Upload SPK
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "$TMP"' EXIT
+
+          tar -xf "$SPK" -C "$TMP" package.tgz INFO conf/resource
+
+          grep -q 'arch="x86_64"' "$TMP/INFO"
+          grep -q '"preload-image": "smart-optimizer-ui-image.tar.gz"' "$TMP/conf/resource"
+
+          tar -tzf "$TMP/package.tgz" | grep -q 'smart-optimizer-ui-image.tar.gz'
+          tar -tzf "$TMP/package.tgz" | grep -q 'smart-optimizer-ui/compose.yaml'
+
+          SPK_BYTES="$(wc -c < "$SPK")"
+          echo "Offline SPK bytes: $SPK_BYTES"
+          test "$SPK_BYTES" -gt 10000000
+
+      - name: Upload offline SPK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SmartOptimizerUI-Synology-SPK
-          path: dist/*.spk
+          name: SmartOptimizerUI-Offline-x86_64
+          path: dist/*OFFLINE-x86_64.spk
           if-no-files-found: error
 
-      - name: Publish v2.0.0 GitHub Release from main
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release v2.0.0]')
+      - name: Publish v2.0.1 offline GitHub Release from main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release v2.0.1]')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          SPK="$(find dist -name '*.spk' -print -quit)"
+          SPK="$(find dist -maxdepth 1 -name '*OFFLINE-x86_64.spk' -print -quit)"
           test -n "$SPK"
+
           TAG="v${{ steps.version.outputs.value }}"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -74,14 +124,14 @@ jobs:
             gh release create "$TAG" "$SPK" \
               --target "$GITHUB_SHA" \
               --title "Smart Optimizer UI $TAG" \
-              --notes-file RELEASE-NOTES-v2.0.0.md
+              --notes-file RELEASE-NOTES-v2.0.1.md
           fi
 
-      - name: Attach SPK to existing tag release
+      - name: Attach offline SPK to existing tag release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          SPK="$(find dist -name '*.spk' -print -quit)"
+          SPK="$(find dist -maxdepth 1 -name '*OFFLINE-x86_64.spk' -print -quit)"
           test -n "$SPK"
           gh release upload "$GITHUB_REF_NAME" "$SPK" --clobber

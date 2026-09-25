@@ -53,6 +53,60 @@ AUTH_PBKDF2_ITERATIONS = 310000
 AUTH_SESSIONS = {}
 AUTH_SESSION_LOCK = threading.Lock()
 
+
+# SMART OPTIMIZER UPDATE SYSTEM START
+
+SMART_OPTIMIZER_VERSION = (
+    str(
+        os.environ.get(
+            "SMART_OPTIMIZER_VERSION",
+            "2.0.1"
+        )
+        or "2.0.1"
+    )
+    .strip()
+    .lstrip("vV")
+)
+
+UPDATE_REPOSITORY = (
+    "MrRobot-88/Smart-Optimizer-UI"
+)
+
+UPDATE_RELEASE_API = (
+    "https://api.github.com/repos/"
+    + UPDATE_REPOSITORY
+    + "/releases/latest"
+)
+
+UPDATE_DIR = os.environ.get(
+    "SMART_OPTIMIZER_UPDATE_DIR",
+    os.path.join(
+        os.path.dirname(
+            CONTROL_FILE
+        ),
+        "updates"
+    )
+)
+
+UPDATE_REQUEST_FILE = os.path.join(
+    UPDATE_DIR,
+    "install-request.json"
+)
+
+UPDATE_STATUS_FILE = os.path.join(
+    UPDATE_DIR,
+    "status.json"
+)
+
+UPDATE_LOCK = threading.Lock()
+
+UPDATE_CACHE = {
+    "loaded": 0,
+    "release": None,
+}
+
+# SMART OPTIMIZER UPDATE SYSTEM END
+
 LIBRARY_CACHE_DIR = os.environ.get("SMART_OPTIMIZER_CACHE_DIR", "/data")
 LIBRARY_CACHE_REFRESH_SECONDS = 60
 
@@ -11912,6 +11966,1695 @@ Media today. A cleaner tomorrow.
 
 
 
+
+# ============================================================
+# SMART OPTIMIZER UPDATE SYSTEM
+# ============================================================
+
+def _update_version_key(value):
+    parts = [
+        int(x)
+        for x in re.findall(
+            r"\d+",
+            str(value or "")
+        )[:4]
+    ]
+
+    while len(parts) < 4:
+        parts.append(0)
+
+    return tuple(parts)
+
+
+def _update_json_write(path, value):
+    os.makedirs(
+        os.path.dirname(path)
+        or ".",
+        exist_ok=True
+    )
+
+    tmp = (
+        path
+        + ".tmp-%d"
+        % os.getpid()
+    )
+
+    with open(
+        tmp,
+        "w",
+        encoding="utf-8"
+    ) as handle:
+
+        json.dump(
+            value,
+            handle,
+            ensure_ascii=False,
+            indent=2
+        )
+
+        handle.flush()
+        os.fsync(
+            handle.fileno()
+        )
+
+    os.replace(
+        tmp,
+        path
+    )
+
+
+def _update_json_read(path):
+    try:
+        with open(
+            path,
+            "r",
+            encoding="utf-8"
+        ) as handle:
+
+            value = json.load(
+                handle
+            )
+
+            return (
+                value
+                if isinstance(
+                    value,
+                    dict
+                )
+                else {}
+            )
+
+    except Exception:
+        return {}
+
+
+def update_runtime_status():
+    return _update_json_read(
+        UPDATE_STATUS_FILE
+    )
+
+
+def latest_update_release(
+    force=False
+):
+    now = time.time()
+
+    with UPDATE_LOCK:
+
+        cached = (
+            UPDATE_CACHE.get(
+                "release"
+            )
+        )
+
+        loaded = float(
+            UPDATE_CACHE.get(
+                "loaded"
+            )
+            or 0
+        )
+
+        if (
+            not force
+            and cached
+            and now - loaded < 300
+        ):
+            return dict(cached)
+
+
+        request = urllib.request.Request(
+            UPDATE_RELEASE_API,
+            headers={
+                "Accept":
+                    "application/vnd.github+json",
+
+                "User-Agent":
+                    "Smart-Optimizer-UI/%s"
+                    % SMART_OPTIMIZER_VERSION,
+            }
+        )
+
+
+        with urllib.request.urlopen(
+            request,
+            timeout=20
+        ) as response:
+
+            raw = json.loads(
+                response.read().decode(
+                    "utf-8"
+                )
+            )
+
+
+        if not isinstance(
+            raw,
+            dict
+        ):
+            raise RuntimeError(
+                "GitHub returned invalid release metadata."
+            )
+
+
+        assets = (
+            raw.get("assets")
+            or []
+        )
+
+
+        spk_assets = [
+            asset
+            for asset in assets
+            if str(
+                asset.get("name")
+                or ""
+            ).lower().endswith(
+                ".spk"
+            )
+        ]
+
+
+        # Prefer the future complete offline package.
+        offline = [
+            asset
+            for asset in spk_assets
+            if "offline" in str(
+                asset.get("name")
+                or ""
+            ).lower()
+        ]
+
+
+        chosen = (
+            offline[0]
+            if offline
+            else (
+                spk_assets[0]
+                if spk_assets
+                else None
+            )
+        )
+
+
+        tag = str(
+            raw.get("tag_name")
+            or ""
+        ).strip()
+
+        version = (
+            tag.lstrip("vV")
+            if tag
+            else ""
+        )
+
+
+        release = {
+            "tag": tag,
+            "version": version,
+
+            "name": str(
+                raw.get("name")
+                or tag
+                or "Latest release"
+            ),
+
+            "notes": str(
+                raw.get("body")
+                or ""
+            ),
+
+            "published_at": str(
+                raw.get("published_at")
+                or ""
+            ),
+
+            "html_url": str(
+                raw.get("html_url")
+                or ""
+            ),
+
+            "asset": chosen,
+        }
+
+
+        UPDATE_CACHE[
+            "loaded"
+        ] = now
+
+        UPDATE_CACHE[
+            "release"
+        ] = dict(
+            release
+        )
+
+
+        return release
+
+
+def download_latest_update():
+    release = latest_update_release(
+        force=True
+    )
+
+    asset = release.get(
+        "asset"
+    )
+
+
+    if not asset:
+        raise RuntimeError(
+            "The latest GitHub release has no SPK package."
+        )
+
+
+    asset_url = str(
+        asset.get(
+            "browser_download_url"
+        )
+        or ""
+    ).strip()
+
+
+    filename = os.path.basename(
+        str(
+            asset.get("name")
+            or ""
+        ).strip()
+    )
+
+
+    if (
+        not asset_url
+        or not filename
+        or not filename.lower().endswith(
+            ".spk"
+        )
+    ):
+        raise RuntimeError(
+            "Invalid SPK release asset."
+        )
+
+
+    os.makedirs(
+        UPDATE_DIR,
+        exist_ok=True
+    )
+
+
+    final_path = os.path.join(
+        UPDATE_DIR,
+        filename
+    )
+
+
+    temporary = (
+        final_path
+        + ".download"
+    )
+
+
+    request = urllib.request.Request(
+        asset_url,
+        headers={
+            "Accept":
+                "application/octet-stream",
+
+            "User-Agent":
+                "Smart-Optimizer-UI/%s"
+                % SMART_OPTIMIZER_VERSION,
+        }
+    )
+
+
+    digest = hashlib.sha256()
+
+
+    try:
+
+        with urllib.request.urlopen(
+            request,
+            timeout=90
+        ) as response:
+
+            with open(
+                temporary,
+                "wb"
+            ) as output:
+
+                while True:
+
+                    chunk = response.read(
+                        1024 * 1024
+                    )
+
+                    if not chunk:
+                        break
+
+                    output.write(
+                        chunk
+                    )
+
+                    digest.update(
+                        chunk
+                    )
+
+
+                output.flush()
+
+                os.fsync(
+                    output.fileno()
+                )
+
+
+        actual_sha = (
+            digest.hexdigest()
+        )
+
+
+        expected_digest = str(
+            asset.get("digest")
+            or ""
+        ).strip().lower()
+
+
+        if expected_digest.startswith(
+            "sha256:"
+        ):
+
+            expected_sha = (
+                expected_digest.split(
+                    ":",
+                    1
+                )[1]
+                .strip()
+            )
+
+
+            if actual_sha.lower() != expected_sha:
+
+                raise RuntimeError(
+                    "Downloaded SPK failed SHA-256 verification."
+                )
+
+
+        os.replace(
+            temporary,
+            final_path
+        )
+
+
+    except Exception:
+
+        try:
+            os.remove(
+                temporary
+            )
+        except OSError:
+            pass
+
+        raise
+
+
+    version = str(
+        release.get("version")
+        or ""
+    )
+
+
+    status = {
+        "state": "downloaded",
+
+        "message":
+            "Package downloaded and SHA-256 verified.",
+
+        "current_version":
+            SMART_OPTIMIZER_VERSION,
+
+        "target_version":
+            version,
+
+        "filename":
+            filename,
+
+        "sha256":
+            actual_sha,
+
+        "updated_at":
+            int(time.time()),
+    }
+
+
+    _update_json_write(
+        UPDATE_STATUS_FILE,
+        status
+    )
+
+
+    install_request = {
+        "action":
+            "install",
+
+        "current_version":
+            SMART_OPTIMIZER_VERSION,
+
+        "target_version":
+            version,
+
+        "tag":
+            release.get("tag")
+            or "",
+
+        "filename":
+            filename,
+
+        "container_path":
+            final_path,
+
+        "sha256":
+            actual_sha,
+
+        # Let the browser receive the result page before
+        # the host updater begins an SPK restart.
+        "not_before":
+            int(time.time()) + 8,
+
+        "requested_at":
+            int(time.time()),
+    }
+
+
+    _update_json_write(
+        UPDATE_REQUEST_FILE,
+        install_request
+    )
+
+
+    return {
+        "release":
+            release,
+
+        "filename":
+            filename,
+
+        "sha256":
+            actual_sha,
+
+        "path":
+            final_path,
+    }
+
+
+def update_status_payload():
+    status = (
+        update_runtime_status()
+    )
+
+    payload = {
+        "installed":
+            SMART_OPTIMIZER_VERSION,
+
+        "state":
+            str(
+                status.get(
+                    "state"
+                )
+                or "idle"
+            ),
+
+        "message":
+            str(
+                status.get(
+                    "message"
+                )
+                or ""
+            ),
+
+        "target_version":
+            str(
+                status.get(
+                    "target_version"
+                )
+                or ""
+            ),
+
+        "updated_at":
+            status.get(
+                "updated_at"
+            ),
+    }
+
+
+    try:
+
+        latest = latest_update_release(
+            force=False
+        )
+
+        payload[
+            "latest"
+        ] = str(
+            latest.get(
+                "version"
+            )
+            or ""
+        )
+
+        payload[
+            "update_available"
+        ] = (
+            _update_version_key(
+                payload["latest"]
+            )
+            >
+            _update_version_key(
+                SMART_OPTIMIZER_VERSION
+            )
+        )
+
+
+    except Exception as exc:
+
+        payload[
+            "latest"
+        ] = ""
+
+        payload[
+            "update_available"
+        ] = False
+
+        payload[
+            "check_error"
+        ] = str(
+            exc
+        )
+
+
+    return payload
+
+
+def updates_page(
+    message="",
+    bad=False,
+    force=False
+):
+    release = None
+    release_error = ""
+
+
+    try:
+
+        release = latest_update_release(
+            force=force
+        )
+
+    except Exception as exc:
+
+        release_error = str(
+            exc
+        )
+
+
+    latest_version = (
+        str(
+            (release or {}).get(
+                "version"
+            )
+            or ""
+        )
+    )
+
+
+    available = bool(
+        latest_version
+        and _update_version_key(
+            latest_version
+        )
+        >
+        _update_version_key(
+            SMART_OPTIMIZER_VERSION
+        )
+    )
+
+
+    runtime = (
+        update_runtime_status()
+    )
+
+
+    if release_error:
+
+        availability = (
+            "Update server unavailable"
+        )
+
+        availability_class = (
+            "offline"
+        )
+
+    elif available:
+
+        availability = (
+            "Update available"
+        )
+
+        availability_class = (
+            "available"
+        )
+
+    else:
+
+        availability = (
+            "Up to date"
+        )
+
+        availability_class = (
+            "current"
+        )
+
+
+    notes = str(
+        (release or {}).get(
+            "notes"
+        )
+        or "No release notes were provided."
+    )
+
+
+    asset = (
+        (release or {}).get(
+            "asset"
+        )
+        or {}
+    )
+
+
+    asset_name = str(
+        asset.get(
+            "name"
+        )
+        or "No SPK asset"
+    )
+
+
+    asset_size = int(
+        asset.get(
+            "size"
+        )
+        or 0
+    )
+
+
+    size_text = (
+        "%.1f MB"
+        % (
+            asset_size
+            / 1024.0
+            / 1024.0
+        )
+        if asset_size
+        else "—"
+    )
+
+
+    runtime_state = str(
+        runtime.get(
+            "state"
+        )
+        or "idle"
+    )
+
+
+    runtime_message = str(
+        runtime.get(
+            "message"
+        )
+        or ""
+    )
+
+
+    notice = ""
+
+    if message:
+
+        notice = (
+            "<div class='update-notice%s'>%s</div>"
+            % (
+                " bad"
+                if bad
+                else "",
+
+                html.escape(
+                    message
+                ),
+            )
+        )
+
+
+    if release_error:
+
+        notes_html = (
+            "<div class='update-empty'>"
+            "Could not contact GitHub Releases: %s"
+            "</div>"
+            % html.escape(
+                release_error
+            )
+        )
+
+    else:
+
+        notes_html = (
+            "<pre class='update-notes'>%s</pre>"
+            % html.escape(
+                notes
+            )
+        )
+
+
+    download_disabled = (
+        " disabled"
+        if not asset
+        else ""
+    )
+
+
+    rendered = """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smart Optimizer · Updates</title>
+
+<style>
+__BASE_CSS__
+
+*{box-sizing:border-box}
+
+html,
+body{
+    margin:0;
+    min-height:100%%;
+}
+
+body.updatebody{
+    min-height:100vh;
+    color:#eef5ff;
+    font-family:
+        Inter,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+    background:#020811;
+    position:relative;
+    overflow-x:hidden;
+}
+
+.update-bg{
+    position:fixed;
+    inset:0;
+    z-index:0;
+
+    background:
+        linear-gradient(
+            180deg,
+            rgba(1,7,14,.20),
+            rgba(1,7,14,.34)
+        ),
+        url('/home-background.png')
+        center center / cover no-repeat;
+}
+
+.update-bg::after{
+    content:"";
+    position:absolute;
+    inset:0;
+
+    background:
+        radial-gradient(
+            circle at 50%% 26%%,
+            rgba(40,211,143,.08),
+            rgba(0,14,31,.10) 42%%,
+            rgba(0,3,10,.28) 100%%
+        );
+}
+
+.update-shell{
+    position:relative;
+    z-index:1;
+
+    width:min(
+        1180px,
+        calc(100vw - 42px)
+    );
+
+    margin:0 auto;
+    padding:28px 0 42px;
+}
+
+.update-top{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:20px;
+    margin-bottom:24px;
+}
+
+.update-heading{
+    display:flex;
+    gap:14px;
+    align-items:center;
+}
+
+.update-icon{
+    width:48px;
+    height:48px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+
+    border-radius:15px;
+
+    font-size:1.55rem;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(17,92,68,.80),
+            rgba(6,35,38,.82)
+        );
+
+    border:
+        1px solid
+        rgba(73,235,166,.25);
+
+    box-shadow:
+        0 10px 26px rgba(0,0,0,.25),
+        0 0 20px rgba(55,222,157,.10);
+}
+
+.update-heading h1{
+    margin:0;
+    font-size:2rem;
+    letter-spacing:-.03em;
+}
+
+.update-heading p{
+    margin:5px 0 0;
+    color:rgba(211,225,242,.70);
+}
+
+.update-nav{
+    display:flex;
+    gap:9px;
+    flex-wrap:wrap;
+}
+
+.update-nav a{
+    min-height:42px;
+    padding:0 16px;
+
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+
+    border-radius:999px;
+
+    color:#eef7ff;
+    text-decoration:none;
+    font-size:.88rem;
+    font-weight:650;
+
+    background:
+        rgba(9,25,42,.72);
+
+    border:
+        1px solid
+        rgba(43,180,255,.20);
+
+    box-shadow:
+        0 10px 24px
+        rgba(0,0,0,.16);
+}
+
+.update-nav a:hover{
+    transform:translateY(-1px);
+    border-color:
+        rgba(75,229,158,.70);
+
+    box-shadow:
+        0 10px 24px rgba(0,0,0,.20),
+        0 0 20px rgba(55,222,157,.16);
+}
+
+.update-notice{
+    margin-bottom:18px;
+    padding:14px 16px;
+
+    border-radius:14px;
+
+    color:#dcfff0;
+
+    background:
+        rgba(8,57,42,.72);
+
+    border:
+        1px solid
+        rgba(66,227,145,.30);
+}
+
+.update-notice.bad{
+    color:#ffdcd7;
+
+    background:
+        rgba(91,22,30,.55);
+
+    border-color:
+        rgba(255,98,84,.38);
+}
+
+.update-hero{
+    padding:24px;
+
+    border-radius:24px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(8,28,45,.92),
+            rgba(4,15,28,.91)
+        );
+
+    border:
+        1px solid
+        rgba(70,225,159,.21);
+
+    backdrop-filter:blur(16px);
+
+    box-shadow:
+        0 24px 62px
+        rgba(0,0,0,.34);
+}
+
+.update-version-grid{
+    display:grid;
+    grid-template-columns:
+        repeat(3,minmax(0,1fr));
+    gap:16px;
+}
+
+.update-version-card{
+    min-height:126px;
+
+    padding:18px;
+
+    border-radius:18px;
+
+    background:
+        rgba(3,15,27,.62);
+
+    border:
+        1px solid
+        rgba(255,255,255,.065);
+}
+
+.update-version-label{
+    color:
+        rgba(201,218,239,.60);
+
+    font-size:.76rem;
+    font-weight:700;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+}
+
+.update-version-value{
+    margin-top:9px;
+
+    font-size:1.6rem;
+    font-weight:760;
+    letter-spacing:-.025em;
+}
+
+.update-version-sub{
+    margin-top:7px;
+
+    color:
+        rgba(205,220,239,.64);
+
+    font-size:.84rem;
+}
+
+.update-status-pill{
+    display:inline-flex;
+    align-items:center;
+
+    min-height:35px;
+
+    margin-top:10px;
+    padding:0 12px;
+
+    border-radius:999px;
+
+    font-size:.82rem;
+    font-weight:720;
+}
+
+.update-status-pill.current{
+    color:#d9ffec;
+
+    border:
+        1px solid
+        rgba(72,228,151,.32);
+
+    background:
+        rgba(17,91,61,.38);
+}
+
+.update-status-pill.available{
+    color:#e6fff5;
+
+    border:
+        1px solid
+        rgba(51,235,164,.52);
+
+    background:
+        rgba(16,116,75,.48);
+
+    box-shadow:
+        0 0 22px
+        rgba(44,225,150,.13);
+}
+
+.update-status-pill.offline{
+    color:#ffe2dc;
+
+    border:
+        1px solid
+        rgba(255,113,90,.34);
+
+    background:
+        rgba(104,40,34,.42);
+}
+
+.update-section{
+    margin-top:20px;
+
+    overflow:hidden;
+
+    border-radius:22px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(9,27,45,.88),
+            rgba(4,15,27,.88)
+        );
+
+    border:
+        1px solid
+        rgba(43,180,255,.16);
+
+    box-shadow:
+        0 20px 54px
+        rgba(0,0,0,.27);
+}
+
+.update-section-head{
+    padding:18px 21px;
+
+    border-bottom:
+        1px solid
+        rgba(255,255,255,.06);
+}
+
+.update-section-head h2{
+    margin:0;
+    font-size:1.25rem;
+}
+
+.update-section-head p{
+    margin:6px 0 0;
+    color:
+        rgba(207,221,240,.64);
+}
+
+.update-notes{
+    margin:0;
+    padding:22px;
+
+    max-height:440px;
+    overflow:auto;
+
+    white-space:pre-wrap;
+    overflow-wrap:anywhere;
+
+    color:
+        rgba(232,242,255,.88);
+
+    font:
+        .90rem/1.62
+        Inter,
+        system-ui,
+        sans-serif;
+
+    background:
+        rgba(2,10,19,.34);
+}
+
+.update-empty{
+    padding:22px;
+    color:
+        rgba(219,229,244,.70);
+}
+
+.update-package{
+    display:grid;
+    grid-template-columns:
+        minmax(0,1fr)
+        auto;
+
+    align-items:center;
+    gap:20px;
+
+    padding:20px 22px;
+}
+
+.update-package-name{
+    font-weight:700;
+    overflow-wrap:anywhere;
+}
+
+.update-package-meta{
+    margin-top:5px;
+    color:
+        rgba(202,219,239,.62);
+    font-size:.84rem;
+}
+
+.update-btn{
+    min-height:46px;
+    padding:0 20px;
+
+    border-radius:13px;
+
+    border:
+        1px solid
+        rgba(73,235,166,.34);
+
+    color:#effff8;
+    font:inherit;
+    font-weight:740;
+
+    cursor:pointer;
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(25,157,104,.92),
+            rgba(10,93,67,.94)
+        );
+
+    box-shadow:
+        0 10px 24px rgba(0,0,0,.22),
+        0 0 20px rgba(53,223,154,.10);
+}
+
+.update-btn:hover:not(:disabled){
+    transform:
+        translateY(-1px);
+
+    border-color:
+        rgba(86,242,177,.72);
+
+    box-shadow:
+        0 12px 28px rgba(0,0,0,.25),
+        0 0 26px rgba(53,223,154,.20);
+}
+
+.update-btn:disabled{
+    opacity:.42;
+    cursor:not-allowed;
+}
+
+.update-runtime{
+    margin-top:18px;
+
+    padding:16px 18px;
+
+    border-radius:16px;
+
+    background:
+        rgba(6,21,35,.70);
+
+    border:
+        1px solid
+        rgba(255,255,255,.065);
+
+    color:
+        rgba(216,230,247,.76);
+}
+
+.update-runtime strong{
+    color:#efffff;
+}
+
+.update-runtime-message{
+    margin-top:5px;
+}
+
+.update-refresh{
+    margin-left:8px;
+    color:#89d9ff;
+    text-decoration:none;
+}
+
+@media(max-width:760px){
+
+    .update-shell{
+        width:
+            calc(100vw - 22px);
+    }
+
+    .update-top{
+        flex-direction:column;
+    }
+
+    .update-version-grid{
+        grid-template-columns:1fr;
+    }
+
+    .update-package{
+        grid-template-columns:1fr;
+    }
+
+    .update-btn{
+        width:100%%;
+    }
+}
+
+</style>
+</head>
+
+
+<body class="updatebody">
+
+<div class="update-bg"></div>
+
+<main class="update-shell">
+
+    <div class="update-top">
+
+        <div class="update-heading">
+
+            <div class="update-icon">
+                ⇧
+            </div>
+
+            <div>
+                <h1>Updates</h1>
+
+                <p>
+                    Smart Optimizer release channel
+                </p>
+            </div>
+
+        </div>
+
+
+        <div class="update-nav">
+
+            <a href="/settings">
+                Settings
+            </a>
+
+            <a href="/">
+                Smart Optimizer
+            </a>
+
+            <a href="/radarr">
+                Radarr
+            </a>
+
+            <a href="/sonarr">
+                Sonarr
+            </a>
+
+        </div>
+
+    </div>
+
+
+    __NOTICE__
+
+
+    <section class="update-hero">
+
+        <div class="update-version-grid">
+
+            <div class="update-version-card">
+
+                <div class="update-version-label">
+                    Installed version
+                </div>
+
+                <div class="update-version-value">
+                    v__CURRENT_VERSION__
+                </div>
+
+                <div class="update-version-sub">
+                    Currently running
+                </div>
+
+            </div>
+
+
+            <div class="update-version-card">
+
+                <div class="update-version-label">
+                    Latest release
+                </div>
+
+                <div class="update-version-value">
+                    __LATEST_VERSION__
+                </div>
+
+                <div class="update-version-sub">
+                    Official GitHub release
+                </div>
+
+            </div>
+
+
+            <div class="update-version-card">
+
+                <div class="update-version-label">
+                    Update status
+                </div>
+
+                <div
+                    class="update-status-pill __AVAILABILITY_CLASS__"
+                >
+                    __AVAILABILITY__
+                </div>
+
+                <div class="update-version-sub">
+                    <a
+                        class="update-refresh"
+                        href="/updates?refresh=1"
+                    >
+                        Check again
+                    </a>
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <div
+            id="updateRuntime"
+            class="update-runtime"
+        >
+
+            <strong>
+                Updater:
+            </strong>
+
+            <span id="updateRuntimeState">
+                __RUNTIME_STATE__
+            </span>
+
+            <div
+                id="updateRuntimeMessage"
+                class="update-runtime-message"
+            >
+                __RUNTIME_MESSAGE__
+            </div>
+
+        </div>
+
+    </section>
+
+
+    <section class="update-section">
+
+        <div class="update-section-head">
+
+            <h2>
+                What's new
+            </h2>
+
+            <p>
+                Release notes from GitHub.
+            </p>
+
+        </div>
+
+        __RELEASE_NOTES__
+
+    </section>
+
+
+    <section class="update-section">
+
+        <div class="update-section-head">
+
+            <h2>
+                Package update
+            </h2>
+
+            <p>
+                Download the verified SPK release.
+                When Smart Optimizer is installed as an SPK,
+                the host updater installs it automatically
+                and restarts the package.
+            </p>
+
+        </div>
+
+
+        <div class="update-package">
+
+            <div>
+
+                <div class="update-package-name">
+                    __ASSET_NAME__
+                </div>
+
+                <div class="update-package-meta">
+                    __ASSET_SIZE__
+                    · GitHub Release
+                    · SHA-256 verified before installation
+                </div>
+
+            </div>
+
+
+            <form
+                id="updateForm"
+                method="post"
+                action="/update-download"
+            >
+
+                <button
+                    id="updateButton"
+                    class="update-btn"
+                    type="submit"
+                    __DOWNLOAD_DISABLED__
+                >
+                    Download latest
+                </button>
+
+            </form>
+
+        </div>
+
+    </section>
+
+</main>
+
+
+<script>
+
+(function(){
+
+    const form =
+        document.getElementById(
+            "updateForm"
+        );
+
+    const button =
+        document.getElementById(
+            "updateButton"
+        );
+
+
+    if(form && button){
+
+        form.addEventListener(
+            "submit",
+            function(){
+
+                button.disabled = true;
+
+                button.textContent =
+                    "Downloading…";
+
+            }
+        );
+
+    }
+
+
+    async function pollUpdate(){
+
+        try{
+
+            const response =
+                await fetch(
+                    "/update-status",
+                    {
+                        cache:"no-store"
+                    }
+                );
+
+
+            if(!response.ok){
+                return;
+            }
+
+
+            const data =
+                await response.json();
+
+
+            const state =
+                document.getElementById(
+                    "updateRuntimeState"
+                );
+
+            const message =
+                document.getElementById(
+                    "updateRuntimeMessage"
+                );
+
+
+            if(state){
+
+                state.textContent =
+                    data.state
+                    || "idle";
+
+            }
+
+
+            if(message){
+
+                message.textContent =
+                    data.message
+                    || "";
+
+            }
+
+
+        }catch(_error){
+        }
+
+    }
+
+
+    pollUpdate();
+
+    setInterval(
+        pollUpdate,
+        2500
+    );
+
+})();
+
+</script>
+
+
+</body>
+</html>"""
+
+
+    replacements = {
+
+        "__BASE_CSS__":
+            CSS,
+
+        "__NOTICE__":
+            notice,
+
+        "__CURRENT_VERSION__":
+            html.escape(
+                SMART_OPTIMIZER_VERSION
+            ),
+
+        "__LATEST_VERSION__":
+            (
+                "v"
+                + html.escape(
+                    latest_version
+                )
+                if latest_version
+                else "Unavailable"
+            ),
+
+        "__AVAILABILITY_CLASS__":
+            availability_class,
+
+        "__AVAILABILITY__":
+            html.escape(
+                availability
+            ),
+
+        "__RUNTIME_STATE__":
+            html.escape(
+                runtime_state
+            ),
+
+        "__RUNTIME_MESSAGE__":
+            html.escape(
+                runtime_message
+                or "Ready"
+            ),
+
+        "__RELEASE_NOTES__":
+            notes_html,
+
+        "__ASSET_NAME__":
+            html.escape(
+                asset_name
+            ),
+
+        "__ASSET_SIZE__":
+            html.escape(
+                size_text
+            ),
+
+        "__DOWNLOAD_DISABLED__":
+            download_disabled,
+
+    }
+
+
+    for key, value in replacements.items():
+
+        rendered = rendered.replace(
+            key,
+            value
+        )
+
+
+    return rendered
+
+
+
 def settings_page(message="", bad=False):
     rcfg, scfg = connection("radarr"), connection("sonarr")
     acfg = load_auth_config()
@@ -12244,6 +13987,18 @@ body.settingsbody{
     box-shadow:
         0 10px 24px rgba(0,0,0,.20),
         0 0 18px rgba(0,174,255,.16);
+}
+
+.settings-nav-link.updates:hover{
+    border-color:
+        rgba(75,229,158,.78);
+
+    background:
+        rgba(12,64,47,.76);
+
+    box-shadow:
+        0 10px 24px rgba(0,0,0,.20),
+        0 0 18px rgba(55,222,157,.17);
 }
 
 .cfg-notice{
@@ -13189,6 +14944,13 @@ body.settingsbody{
         href="/sonarr"
       >
         Sonarr
+      </a>
+
+      <a
+        class="settings-nav-link updates"
+        href="/updates"
+      >
+        Updates
       </a>
 
     </div>
@@ -15528,6 +17290,44 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        if path == "/update-status":
+
+            payload = (
+                update_status_payload()
+            )
+
+            body = json.dumps(
+                payload
+            ).encode(
+                "utf-8"
+            )
+
+            self.send_response(200)
+
+            self.send_header(
+                "Content-Type",
+                "application/json"
+            )
+
+            self.send_header(
+                "Content-Length",
+                str(len(body))
+            )
+
+            self.send_header(
+                "Cache-Control",
+                "no-store"
+            )
+
+            self.end_headers()
+
+            self.wfile.write(
+                body
+            )
+
+            return
+
+
         if path == "/status":
             app = (urllib.parse.parse_qs(parsed.query).get("app") or [""])[0]
             if app not in ("radarr", "sonarr"):
@@ -15600,6 +17400,24 @@ class Handler(BaseHTTPRequestHandler):
             rendered = sonarr_page()
         elif path == "/settings":
             rendered = settings_page()
+
+        elif path == "/updates":
+
+            qs = urllib.parse.parse_qs(
+                parsed.query
+            )
+
+            force = (
+                (
+                    qs.get("refresh")
+                    or [""]
+                )[0]
+                == "1"
+            )
+
+            rendered = updates_page(
+                force=force
+            )
         elif path == "/radarr/history":
             rendered = history_page("radarr")
         elif path == "/sonarr/history":
@@ -15774,6 +17592,87 @@ class Handler(BaseHTTPRequestHandler):
 
         length = min(int(self.headers.get("Content-Length", "0")), 4096)
         form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
+
+        if path == "/update-download":
+
+            if not ENABLE_ACTIONS:
+
+                self.send_error(
+                    403
+                )
+
+                return
+
+
+            try:
+
+                result = (
+                    download_latest_update()
+                )
+
+                target = str(
+                    (
+                        result.get(
+                            "release"
+                        )
+                        or {}
+                    ).get(
+                        "version"
+                    )
+                    or ""
+                )
+
+
+                rendered = updates_page(
+                    (
+                        "Smart Optimizer v%s downloaded "
+                        "and SHA-256 verified. "
+                        "The updater will continue automatically."
+                    )
+                    % target
+                )
+
+
+            except Exception as exc:
+
+                rendered = updates_page(
+                    str(exc),
+                    True
+                )
+
+
+            body = rendered.encode(
+                "utf-8"
+            )
+
+
+            self.send_response(
+                200
+            )
+
+            self.send_header(
+                "Content-Type",
+                "text/html; charset=utf-8"
+            )
+
+            self.send_header(
+                "Content-Length",
+                str(len(body))
+            )
+
+            self.send_header(
+                "Cache-Control",
+                "no-store"
+            )
+
+            self.end_headers()
+
+            self.wfile.write(
+                body
+            )
+
+            return
+
 
         if self.path == "/connection-settings":
             if not ENABLE_ACTIONS:

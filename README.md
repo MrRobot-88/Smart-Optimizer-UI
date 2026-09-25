@@ -66,11 +66,19 @@ Docker or Portainer automatically selects the matching architecture.
 
 ### Native packages
 
-The Docker image remains the primary cross-platform distribution. A Synology DSM 7.2.1+ `.spk` wrapper is also built for NAS models that support **Container Manager**. The SPK does not replace the container: it asks DSM's official Container Manager resource worker to deploy the same multi-architecture GHCR image, keeps configuration/state in the package's persistent `var` directory, and exposes the UI on port `8788`.
+Starting with **v2.0.1**, the Synology DSM 7.2.1+ package is a **full offline x86_64 SPK** for Intel/AMD Synology systems that support **Container Manager**. It bundles the complete Smart Optimizer container image inside the SPK, including the current UI, Radarr engine and Sonarr engine.
 
-The SPK is architecture-independent itself (`noarch`); the underlying container is still selected automatically from the published `linux/amd64`, `linux/arm64` and `linux/arm/v7` images. Synology models that cannot install/run Container Manager should continue to use another supported Docker host rather than this SPK.
+A fresh SPK installation therefore does **not** need to contact GitHub Container Registry or Docker Hub to obtain Smart Optimizer. DSM's official Container Manager `docker-project` resource worker preloads the bundled image from the package and then deploys the project. Configuration and optimizer state live in the package's persistent `var` directory, separate from the replaceable application image.
 
-Tagged GitHub releases automatically include the matching versioned Synology `.spk` asset. The SPK itself is `noarch`; when installed, Container Manager pulls the matching Docker image for `linux/amd64`, `linux/arm64` or `linux/arm/v7`. Workflow artifacts are also retained after successful SPK builds. Native Debian/Ubuntu `.deb`, RPM `.rpm`, QNAP `.qpkg` and other vendor-specific packages are not currently published.
+The offline SPK is architecture-specific because it contains a real `linux/amd64` container image. Its `INFO` metadata is therefore `arch="x86_64"`, which covers Synology x86_64 platform families including apollolake systems such as the DS918+. ARM NAS models should continue to use the multi-architecture GHCR image until separate offline ARM SPKs are published.
+
+GitHub releases include the versioned offline package:
+
+`SmartOptimizerUI-VERSION-DSM7.2.1-OFFLINE-x86_64.spk`
+
+The build fails if the bundled image is missing or if the resulting SPK is implausibly small, preventing accidental publication of a bootstrap-only package.
+
+Native Debian/Ubuntu `.deb`, RPM `.rpm`, QNAP `.qpkg` and other vendor-specific packages are not currently published.
 
 ## Recommended install: Portainer Stack
 
