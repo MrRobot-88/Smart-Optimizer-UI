@@ -46,6 +46,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          chmod +x ./packaging/synology/build-spk.sh
           VERSION='${{ steps.version.outputs.value }}' \
           PORTABLE_PYTHON_ARCHIVE="$PWD/portable-python.tar.gz" \
           ./packaging/synology/build-spk.sh "$PWD/dist"
