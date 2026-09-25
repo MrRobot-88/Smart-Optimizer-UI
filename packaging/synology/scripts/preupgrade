@@ -1,2 +1,3 @@
 #!/bin/sh
+# Package VAR survives upgrades; config/auth/state remain under SYNOPKG_PKGVAR.
 exit 0
