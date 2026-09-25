@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - v2.0.2-native-spk
     tags:
       - "v*"
   pull_request:
@@ -29,10 +28,16 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
               VERSION="${GITHUB_REF_NAME#v}"
           else
-              VERSION="2.0.2"
+              VERSION="2.0.3"
           fi
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building Smart Optimizer UI $VERSION"
+
+      - name: Install icon build dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check "Pillow==11.3.0"
 
       - name: Download portable native Python runtime
         shell: bash
@@ -88,6 +93,20 @@ jobs:
               exit 1
           fi
 
+          python3 - <<'PY'
+          import struct
+          from pathlib import Path
+
+          for name, expected in (("PACKAGE_ICON.PNG", (64, 64)), ("PACKAGE_ICON_256.PNG", (256, 256))):
+              data = Path("verify", name).read_bytes()
+              if data[:8] != b"\x89PNG\r\n\x1a\n":
+                  raise SystemExit(f"{name} is not a PNG")
+              width, height = struct.unpack(">II", data[16:24])
+              if (width, height) != expected:
+                  raise SystemExit(f"{name}: expected {expected}, got {(width, height)}")
+              print(f"{name}: {width}x{height} OK")
+          PY
+
           verify/payload/runtime/python/bin/python3 -c 'import ssl, urllib.request, http.server; print("Native runtime validation OK")'
 
       - name: Upload native SPK artifact
@@ -97,11 +116,11 @@ jobs:
           path: dist/*.spk
           if-no-files-found: error
 
-      - name: Publish v2.0.2 native GitHub Release
+      - name: Publish v2.0.3 native GitHub Release
         if: >
           github.event_name == 'push' &&
           github.ref == 'refs/heads/main' &&
-          contains(github.event.head_commit.message, '[release v2.0.2]')
+          contains(github.event.head_commit.message, '[release v2.0.3]')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -109,15 +128,15 @@ jobs:
           set -euo pipefail
           SPK="$(find dist -name '*.spk' -print -quit)"
           test -n "$SPK"
-          TAG='v2.0.2'
+          TAG='v2.0.3'
 
           if gh release view "$TAG" >/dev/null 2>&1; then
               gh release upload "$TAG" "$SPK" --clobber
           else
               gh release create "$TAG" "$SPK" \
                 --target "$GITHUB_SHA" \
-                --title 'Smart Optimizer UI v2.0.2' \
-                --notes-file RELEASE-NOTES-v2.0.2.md
+                --title 'Smart Optimizer UI v2.0.3' \
+                --notes-file RELEASE-NOTES-v2.0.3.md
           fi
 
       - name: Attach native SPK to tag release
