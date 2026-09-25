@@ -1,24 +1,108 @@
 #!/bin/sh
-case "$1" in
-  start|stop)
-    # Container lifecycle is handled by DSM's docker-project resource worker.
-    exit 0
-    ;;
-  status)
-    # Avoid direct Docker socket access: DSM 7 packages run unprivileged.
-    if command -v wget >/dev/null 2>&1; then
-      wget -q -T 3 -O /dev/null http://127.0.0.1:8788/ && exit 0
-    elif command -v curl >/dev/null 2>&1; then
-      curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:8788/ && exit 0
+set -u
+
+TARGET="${SYNOPKG_PKGDEST}"
+VAR="${SYNOPKG_PKGVAR}"
+
+PYTHON="$TARGET/runtime/python/bin/python3"
+APP="$TARGET/app/smart-optimizer-ui.py"
+
+PIDFILE="$VAR/smart-optimizer-ui.pid"
+LOGFILE="$VAR/smart-optimizer-ui.log"
+
+is_running() {
+    [ -f "$PIDFILE" ] || return 1
+    PID="$(cat "$PIDFILE" 2>/dev/null || true)"
+    [ -n "$PID" ] || return 1
+    kill -0 "$PID" 2>/dev/null
+}
+
+start_service() {
+    if is_running; then
+        exit 0
     fi
-    exit 1
-    ;;
-  log)
-    echo "Smart Optimizer UI: http://127.0.0.1:8788/"
+
+    mkdir -p "$VAR/config" "$VAR/data" "$VAR/tmp"
+
+    if [ ! -x "$PYTHON" ]; then
+        echo "Bundled Python runtime missing: $PYTHON" >&2
+        exit 1
+    fi
+
+    if [ ! -f "$APP" ]; then
+        echo "Smart Optimizer application missing: $APP" >&2
+        exit 1
+    fi
+
+    export HOME="$VAR"
+    export TMPDIR="$VAR/tmp"
+    export PATH="$TARGET/runtime/python/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+    export SMART_UI_HOST="0.0.0.0"
+    export SMART_UI_PORT="8788"
+    export SMART_UI_ENABLE_ACTIONS="1"
+
+    export RADARR_OPTIMIZER_SCRIPT="$TARGET/app/radarr-smart-optimizer.py"
+    export SONARR_OPTIMIZER_SCRIPT="$TARGET/app/sonarr-smart-optimizer.py"
+
+    export RADARR_OPTIMIZER_STATE="$VAR/data/radarr-state.json"
+    export SONARR_OPTIMIZER_STATE="$VAR/data/sonarr-state.json"
+
+    export SMART_OPTIMIZER_CONTROL="$VAR/config/smart-optimizer-control.json"
+    export SMART_OPTIMIZER_CONNECTIONS="$VAR/config/smart-optimizer-connections.json"
+    export SMART_OPTIMIZER_AUTH="$VAR/config/smart-optimizer-auth.json"
+    export SMART_OPTIMIZER_CACHE_DIR="$VAR/data"
+
+    export SMART_OPTIMIZER_NATIVE_SPK="1"
+    export SMART_OPTIMIZER_PACKAGE_VERSION="${SYNOPKG_PKGVER:-2.0.2}"
+    export SMART_OPTIMIZER_VERSION="${SYNOPKG_PKGVER:-2.0.2}"
+
+    cd "$TARGET/app"
+
+    nohup "$PYTHON" "$APP" >>"$LOGFILE" 2>&1 &
+    PID="$!"
+    echo "$PID" > "$PIDFILE"
+
+    sleep 2
+
+    if ! kill -0 "$PID" 2>/dev/null; then
+        echo "Smart Optimizer failed to start." >&2
+        tail -100 "$LOGFILE" >&2 2>/dev/null || true
+        rm -f "$PIDFILE"
+        exit 1
+    fi
+
     exit 0
-    ;;
-  *)
-    echo "Usage: $0 {start|stop|status|log}" >&2
-    exit 1
-    ;;
+}
+
+stop_service() {
+    if ! is_running; then
+        rm -f "$PIDFILE"
+        exit 0
+    fi
+
+    PID="$(cat "$PIDFILE")"
+    kill "$PID" 2>/dev/null || true
+
+    COUNT=0
+    while kill -0 "$PID" 2>/dev/null; do
+        COUNT=$((COUNT + 1))
+        if [ "$COUNT" -ge 20 ]; then
+            kill -9 "$PID" 2>/dev/null || true
+            break
+        fi
+        sleep 1
+    done
+
+    rm -f "$PIDFILE"
+    exit 0
+}
+
+case "${1:-}" in
+    start) start_service ;;
+    stop) stop_service ;;
+    restart) stop_service; start_service ;;
+    status) if is_running; then exit 0; else exit 1; fi ;;
+    log) [ -f "$LOGFILE" ] && tail -100 "$LOGFILE"; exit 0 ;;
+    *) echo "Usage: $0 {start|stop|restart|status|log}" >&2; exit 1 ;;
 esac

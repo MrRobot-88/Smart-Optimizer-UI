@@ -1,26 +1,20 @@
-name: Build Synology Offline SPK
+name: Synology Native Offline SPK
 
 on:
   push:
-    branches: [main]
-    tags: ["v*"]
+    branches:
+      - main
+      - v2.0.2-native-spk
+    tags:
+      - "v*"
   pull_request:
-    branches: [main]
-    paths:
-      - "smart-optimizer-ui.py"
-      - "radarr-smart-optimizer.py"
-      - "sonarr-smart-optimizer.py"
-      - "Dockerfile"
-      - "packaging/synology/**"
-      - "RELEASE-NOTES-v2.0.1.md"
-      - ".github/workflows/synology-spk.yml"
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build-offline-spk:
+  native-spk:
     runs-on: ubuntu-latest
 
     steps:
@@ -31,107 +25,108 @@ jobs:
         id: version
         shell: bash
         run: |
+          set -euo pipefail
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+              VERSION="${GITHUB_REF_NAME#v}"
           else
-            echo "value=2.0.1" >> "$GITHUB_OUTPUT"
+              VERSION="2.0.2"
           fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building Smart Optimizer UI $VERSION"
 
-      - name: Build exact offline x86_64 container image
-        env:
-          VERSION: ${{ steps.version.outputs.value }}
+      - name: Download portable native Python runtime
+        shell: bash
         run: |
-          docker build \
-            --platform linux/amd64 \
-            --tag "smart-optimizer-ui:$VERSION" \
-            .
+          set -euo pipefail
+          URL='https://github.com/astral-sh/python-build-standalone/releases/download/20260924/cpython-3.12.14%2B20260924-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz'
+          curl -fL --retry 4 --retry-delay 3 "$URL" -o portable-python.tar.gz
+          echo '269b2c99e4db15b242bf01832f4fea1e8f1a664f273cff519393f296e9820b41  portable-python.tar.gz' | sha256sum -c -
 
-          docker image inspect "smart-optimizer-ui:$VERSION" >/dev/null
-
-      - name: Export bundled image for DSM preload
-        env:
-          VERSION: ${{ steps.version.outputs.value }}
+      - name: Build native offline SPK
+        shell: bash
         run: |
-          mkdir -p dist/offline-image
+          set -euo pipefail
+          chmod +x ./packaging/synology/build-spk.sh
+          VERSION='${{ steps.version.outputs.value }}' \
+          PORTABLE_PYTHON_ARCHIVE="$PWD/portable-python.tar.gz" \
+          ./packaging/synology/build-spk.sh "$PWD/dist"
 
-          docker save "smart-optimizer-ui:$VERSION" \
-            | gzip -9 \
-            > dist/offline-image/smart-optimizer-ui-image.tar.gz
-
-          test -s dist/offline-image/smart-optimizer-ui-image.tar.gz
-
-          BYTES="$(wc -c < dist/offline-image/smart-optimizer-ui-image.tar.gz)"
-          echo "Bundled image bytes: $BYTES"
-
-          test "$BYTES" -gt 10000000
-
-      - name: Build full offline SPK
-        env:
-          VERSION: ${{ steps.version.outputs.value }}
-          OFFLINE_IMAGE_ARCHIVE: ${{ github.workspace }}/dist/offline-image/smart-optimizer-ui-image.tar.gz
+      - name: Validate native package
+        shell: bash
         run: |
-          chmod +x packaging/synology/build-spk.sh
-          packaging/synology/build-spk.sh dist
-
-      - name: Validate offline SPK structure and payload
-        run: |
-          SPK="$(find dist -maxdepth 1 -name '*OFFLINE-x86_64.spk' -print -quit)"
+          set -euo pipefail
+          SPK="$(find dist -maxdepth 1 -type f -name '*.spk' -print -quit)"
           test -n "$SPK"
 
-          tar -tf "$SPK" | grep -qx 'INFO'
-          tar -tf "$SPK" | grep -qx 'package.tgz'
-          tar -tf "$SPK" | grep -qx 'conf/privilege'
-          tar -tf "$SPK" | grep -qx 'conf/resource'
-          tar -tf "$SPK" | grep -qx 'scripts/start-stop-status'
-          tar -tf "$SPK" | grep -qx 'PACKAGE_ICON.PNG'
-          tar -tf "$SPK" | grep -qx 'PACKAGE_ICON_256.PNG'
+          BYTES="$(wc -c < "$SPK")"
+          echo "SPK size: $BYTES"
+          test "$BYTES" -gt 20000000
 
-          TMP="$(mktemp -d)"
-          trap 'rm -rf "$TMP"' EXIT
+          mkdir verify
+          tar -xf "$SPK" -C verify
 
-          tar -xf "$SPK" -C "$TMP" package.tgz INFO conf/resource
+          for ITEM in               INFO               package.tgz               scripts/start-stop-status               conf/privilege               PACKAGE_ICON.PNG               PACKAGE_ICON_256.PNG
+          do
+              test -e "verify/$ITEM"
+          done
 
-          grep -q 'arch="x86_64"' "$TMP/INFO"
-          grep -q '"preload-image": "smart-optimizer-ui-image.tar.gz"' "$TMP/conf/resource"
+          mkdir verify/payload
+          tar -xzf verify/package.tgz -C verify/payload
 
-          tar -tzf "$TMP/package.tgz" | grep -q 'smart-optimizer-ui-image.tar.gz'
-          tar -tzf "$TMP/package.tgz" | grep -q 'smart-optimizer-ui/compose.yaml'
+          test -x verify/payload/runtime/python/bin/python3
+          test -f verify/payload/app/smart-optimizer-ui.py
+          test -f verify/payload/app/radarr-smart-optimizer.py
+          test -f verify/payload/app/sonarr-smart-optimizer.py
 
-          SPK_BYTES="$(wc -c < "$SPK")"
-          echo "Offline SPK bytes: $SPK_BYTES"
-          test "$SPK_BYTES" -gt 10000000
+          if find verify \( -iname '*docker*' -o -iname '*compose*' \) | grep -q .; then
+              echo "ERROR: Docker/container content found in native SPK."
+              exit 1
+          fi
 
-      - name: Upload offline SPK artifact
+          if grep -R -E 'ContainerManager|docker-project|preload-image' verify/INFO verify/conf verify/scripts; then
+              echo "ERROR: Container Manager dependency remains."
+              exit 1
+          fi
+
+          verify/payload/runtime/python/bin/python3 -c 'import ssl, urllib.request, http.server; print("Native runtime validation OK")'
+
+      - name: Upload native SPK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SmartOptimizerUI-Offline-x86_64
-          path: dist/*OFFLINE-x86_64.spk
+          name: SmartOptimizerUI-${{ steps.version.outputs.value }}-NATIVE-OFFLINE-x86_64
+          path: dist/*.spk
           if-no-files-found: error
 
-      - name: Publish v2.0.1 offline GitHub Release from main
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release v2.0.1]')
+      - name: Publish v2.0.2 native GitHub Release
+        if: >
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          contains(github.event.head_commit.message, '[release v2.0.2]')
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          SPK="$(find dist -maxdepth 1 -name '*OFFLINE-x86_64.spk' -print -quit)"
+          set -euo pipefail
+          SPK="$(find dist -name '*.spk' -print -quit)"
           test -n "$SPK"
-
-          TAG="v${{ steps.version.outputs.value }}"
+          TAG='v2.0.2'
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$SPK" --clobber
+              gh release upload "$TAG" "$SPK" --clobber
           else
-            gh release create "$TAG" "$SPK" \
-              --target "$GITHUB_SHA" \
-              --title "Smart Optimizer UI $TAG" \
-              --notes-file RELEASE-NOTES-v2.0.1.md
+              gh release create "$TAG" "$SPK" \
+                --target "$GITHUB_SHA" \
+                --title 'Smart Optimizer UI v2.0.2' \
+                --notes-file RELEASE-NOTES-v2.0.2.md
           fi
 
-      - name: Attach offline SPK to existing tag release
+      - name: Attach native SPK to tag release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          SPK="$(find dist -maxdepth 1 -name '*OFFLINE-x86_64.spk' -print -quit)"
+          set -euo pipefail
+          SPK="$(find dist -name '*.spk' -print -quit)"
           test -n "$SPK"
           gh release upload "$GITHUB_REF_NAME" "$SPK" --clobber

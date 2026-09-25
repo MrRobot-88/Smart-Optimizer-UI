@@ -1,8 +1,5 @@
 #!/bin/sh
 set -eu
-
-mkdir -p \
-  "$SYNOPKG_PKGVAR/config" \
-  "$SYNOPKG_PKGVAR/data"
-
+mkdir -p "$SYNOPKG_PKGVAR/config" "$SYNOPKG_PKGVAR/data" "$SYNOPKG_PKGVAR/tmp"
+chmod 700 "$SYNOPKG_PKGVAR/config" "$SYNOPKG_PKGVAR/data"
 exit 0

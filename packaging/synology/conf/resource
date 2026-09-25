@@ -1,14 +1,1 @@
-{
-  "docker-project": {
-    "preload-image": "smart-optimizer-ui-image.tar.gz",
-    "projects": [{
-      "name": "smart-optimizer-ui",
-      "path": "smart-optimizer-ui",
-      "build_params": {
-        "force_pull": false,
-        "force_recreate": true,
-        "build": false
-      }
-    }]
-  }
-}
+{}
