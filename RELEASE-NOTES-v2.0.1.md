@@ -2,19 +2,34 @@
 
 ## Full offline Synology package
 
-- Reworked the Synology SPK into a **self-contained offline installer** for x86_64 DSM 7.2.1+ systems.
-- The SPK now bundles the complete Smart Optimizer container image instead of acting as a tiny bootstrap package.
-- A fresh NAS installation no longer needs GitHub Container Registry or internet access to obtain the application image.
-- Synology Container Manager preloads the bundled image through the official DSM `docker-project` resource worker before starting the project.
-- The offline package is intentionally fail-closed during CI/build if the bundled image or final SPK is suspiciously small.
-- Package config and optimizer state now use the persistent DSM package `var` directory so upgrades do not replace user settings/state with application files.
+- The Synology DSM 7.2.1+ x86_64 SPK is now a **full self-contained offline installer**, not a tiny bootstrap package.
+- The complete Smart Optimizer container image is bundled inside the SPK.
+- A fresh installation does not need GitHub Container Registry, Docker Hub or internet access to obtain Smart Optimizer itself.
+- Synology Container Manager uses the official `docker-project` preload-image mechanism to load the bundled image before deploying the project.
+- The build fails closed if the image archive or resulting SPK is suspiciously small, preventing accidental publication of another ~20 KB bootstrap package.
+- Configuration, authentication and optimizer state remain in DSM's persistent package `var` directory so application upgrades do not overwrite user data.
+
+## New Updates page
+
+- Added an **Updates** entry from Settings.
+- Added a dedicated Updates page showing:
+  - installed version
+  - latest GitHub release
+  - update status
+  - full release changelog
+  - release package name and size
+- Added update-package download support from the UI.
+- The release package is SHA-256 verified before installation when a checksum is available.
+- When Smart Optimizer is installed as the Synology SPK, the updater can hand the downloaded package to the package update path and restart Smart Optimizer after the upgrade.
+- Normal Smart Optimizer operation and first-time offline installation do not require internet access. Internet is only needed when the user explicitly checks for or downloads a newer release.
+- If GitHub is unavailable, the installed version continues to work normally.
 
 ## Smart Optimizer UI
 
-- Includes the full modern Smart Optimizer UI: current backgrounds, icons, glass styling, Radarr/Sonarr themes, Manual Optimizer views, caching, authentication and settings.
-- Includes the current Updates page/changelog experience from the live UI.
-- The Updates page checks GitHub Releases when internet is available; normal Smart Optimizer operation and offline installation do not require internet access.
-- Future update releases can be downloaded from the Updates page while the installed app remains usable when GitHub is unavailable.
+- Includes the exact current live UI used on the verified NAS.
+- Includes the current home, Radarr and Sonarr backgrounds, icons, glass styling and UI effects.
+- Includes current Settings, authentication, cached library search, Manual Optimizer, exclusions, download radar, history and status views.
+- Includes the full merged Radarr + Sonarr optimizer engines inside the same container image.
 
 ## Radarr engine
 
@@ -47,4 +62,4 @@ Sonarr v2 policy validation:
 - WARN=0
 - FAIL=0
 
-The public package/repository does not include configured API keys, authentication passwords, Deluge credentials, connection files or runtime state.
+The public package/repository does not include configured API keys, authentication passwords, Deluge credentials, connection files or runtime optimizer state.
