@@ -28,7 +28,7 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
               VERSION="${GITHUB_REF_NAME#v}"
           else
-              VERSION="2.0.3"
+              VERSION="2.0.4"
           fi
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building Smart Optimizer UI $VERSION"
@@ -82,6 +82,16 @@ jobs:
           test -f verify/payload/app/smart-optimizer-ui.py
           test -f verify/payload/app/radarr-smart-optimizer.py
           test -f verify/payload/app/sonarr-smart-optimizer.py
+          test -f verify/payload/app/assets/home-background.png
+          test -f verify/payload/app/assets/radarr-background.png
+          test -f verify/payload/app/assets/sonarr-background.png
+          test -f verify/payload/app/assets/radarr-icon.png
+          test -f verify/payload/app/assets/sonarr-icon.png
+          test -f verify/payload/app/assets/settings-icon.png
+          test -f verify/payload/app/assets/smart-optimizer-logo.png
+          test -f verify/payload/app/assets/smart-optimizer-logo-web.png
+          test -f verify/payload/app/assets/fragments/update-status-favicon.html
+          test -f verify/payload/app/assets/fragments/admin-update-mode.html
 
           if find verify \( -iname '*docker*' -o -iname '*compose*' \) | grep -q .; then
               echo "ERROR: Docker/container content found in native SPK."
@@ -116,11 +126,11 @@ jobs:
           path: dist/*.spk
           if-no-files-found: error
 
-      - name: Publish v2.0.3 native GitHub Release
+      - name: Publish v2.0.4 native GitHub Release
         if: >
           github.event_name == 'push' &&
           github.ref == 'refs/heads/main' &&
-          contains(github.event.head_commit.message, '[release v2.0.3]')
+          contains(github.event.head_commit.message, '[release v2.0.4]')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -128,15 +138,15 @@ jobs:
           set -euo pipefail
           SPK="$(find dist -name '*.spk' -print -quit)"
           test -n "$SPK"
-          TAG='v2.0.3'
+          TAG='v2.0.4'
 
           if gh release view "$TAG" >/dev/null 2>&1; then
               gh release upload "$TAG" "$SPK" --clobber
           else
               gh release create "$TAG" "$SPK" \
                 --target "$GITHUB_SHA" \
-                --title 'Smart Optimizer UI v2.0.3' \
-                --notes-file RELEASE-NOTES-v2.0.3.md
+                --title 'Smart Optimizer UI v2.0.4' \
+                --notes-file RELEASE-NOTES-v2.0.4.md
           fi
 
       - name: Attach native SPK to tag release

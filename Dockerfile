@@ -1,6 +1,7 @@
 FROM python:3.12-alpine
 WORKDIR /app
 COPY smart-optimizer-ui.py /app/smart-optimizer-ui.py
+COPY assets /app/assets
 COPY radarr-smart-optimizer.py /app/radarr-smart-optimizer.py
 COPY sonarr-smart-optimizer.py /app/sonarr-smart-optimizer.py
 RUN python3 -m py_compile \
