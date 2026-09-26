@@ -17051,10 +17051,10 @@ def download_latest_update():
 
 
     status = {
-        "state": "downloaded",
+        "state": "ready",
 
         "message":
-            "Package downloaded and SHA-256 verified.",
+            "Verified SPK ready for manual installation.",
 
         "current_version":
             SMART_OPTIMIZER_VERSION,
@@ -17079,45 +17079,6 @@ def download_latest_update():
     )
 
 
-    install_request = {
-        "action":
-            "install",
-
-        "current_version":
-            SMART_OPTIMIZER_VERSION,
-
-        "target_version":
-            version,
-
-        "tag":
-            release.get("tag")
-            or "",
-
-        "filename":
-            filename,
-
-        "container_path":
-            final_path,
-
-        "sha256":
-            actual_sha,
-
-        # Let the browser receive the result page before
-        # the host updater begins an SPK restart.
-        "not_before":
-            int(time.time()) + 8,
-
-        "requested_at":
-            int(time.time()),
-    }
-
-
-    _update_json_write(
-        UPDATE_REQUEST_FILE,
-        install_request
-    )
-
-
     return {
         "release":
             release,
@@ -17131,6 +17092,61 @@ def download_latest_update():
         "path":
             final_path,
     }
+
+
+def verified_update_file():
+    status = update_runtime_status()
+
+    filename = os.path.basename(
+        str(
+            status.get(
+                "filename"
+            )
+            or ""
+        ).strip()
+    )
+
+    target_version = str(
+        status.get(
+            "target_version"
+        )
+        or ""
+    ).strip()
+
+    if (
+        str(
+            status.get(
+                "state"
+            )
+            or ""
+        )
+        != "ready"
+        or not filename
+        or not filename.lower().endswith(
+            ".spk"
+        )
+    ):
+        raise RuntimeError(
+            "No verified SPK is ready for download."
+        )
+
+    path = os.path.join(
+        UPDATE_DIR,
+        filename
+    )
+
+    if not os.path.isfile(
+        path
+    ):
+        raise RuntimeError(
+            "The verified SPK file is no longer available."
+        )
+
+    return (
+        filename,
+        path,
+        target_version,
+    )
 
 
 def update_status_payload():
@@ -17361,6 +17377,25 @@ def updates_page(
     )
 
 
+    prepared_update = False
+
+    try:
+        (
+            _prepared_name,
+            _prepared_path,
+            _prepared_version,
+        ) = verified_update_file()
+
+        prepared_update = bool(
+            latest_version
+            and _prepared_version
+            == latest_version
+        )
+
+    except Exception:
+        prepared_update = False
+
+
     notice = ""
 
     if message:
@@ -17405,6 +17440,35 @@ def updates_page(
         if not asset
         else ""
     )
+
+
+    if prepared_update:
+
+        update_action = (
+            "<a "
+            "id='updateButton' "
+            "class='update-btn' "
+            "href='/update-package-file'>"
+            "Download verified SPK"
+            "</a>"
+        )
+
+    else:
+
+        update_action = (
+            "<form "
+            "id='updateForm' "
+            "method='post' "
+            "action='/update-download'>"
+            "<button "
+            "id='updateButton' "
+            "class='update-btn' "
+            "type='submit'%s>"
+            "Prepare update"
+            "</button>"
+            "</form>"
+            % download_disabled
+        )
 
 
     rendered = _smart_expand_common("""<!doctype html>
@@ -17827,6 +17891,11 @@ body.updatebody{
     min-height:46px;
     padding:0 20px;
 
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    text-decoration:none;
+
     border-radius:13px;
 
     border:
@@ -18097,10 +18166,12 @@ body.updatebody{
             </h2>
 
             <p>
-                Download the verified SPK release.
-                When Smart Optimizer is installed as an SPK,
-                the host updater installs it automatically
-                and restarts the package.
+                Prepare and verify the latest SPK release.
+                DSM 7 runs third-party packages without root privileges,
+                so GitHub-installed builds cannot silently replace their
+                own package. Download the verified SPK here, then install
+                it over the current version using Package Center &gt;
+                Manual Install. Your saved settings are preserved.
             </p>
 
         </div>
@@ -18117,28 +18188,13 @@ body.updatebody{
                 <div class="update-package-meta">
                     __ASSET_SIZE__
                     · GitHub Release
-                    · SHA-256 verified before installation
+                    · SHA-256 verified before download
                 </div>
 
             </div>
 
 
-            <form
-                id="updateForm"
-                method="post"
-                action="/update-download"
-            >
-
-                <button
-                    id="updateButton"
-                    class="update-btn"
-                    type="submit"
-                    __DOWNLOAD_DISABLED__
-                >
-                    Download latest
-                </button>
-
-            </form>
+            __UPDATE_ACTION__
 
         </div>
 
@@ -18315,6 +18371,9 @@ body.updatebody{
 
         "__DOWNLOAD_DISABLED__":
             download_disabled,
+
+        "__UPDATE_ACTION__":
+            update_action,
 
     }
 
@@ -22412,6 +22471,88 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        if path == "/update-package-file":
+
+            try:
+                (
+                    filename,
+                    file_path,
+                    _target_version,
+                ) = verified_update_file()
+
+                file_size = os.path.getsize(
+                    file_path
+                )
+
+                safe_name = (
+                    filename
+                    .replace(
+                        '"',
+                        ""
+                    )
+                    .replace(
+                        "\\",
+                        "_"
+                    )
+                )
+
+                self.send_response(
+                    200
+                )
+
+                self.send_header(
+                    "Content-Type",
+                    "application/octet-stream"
+                )
+
+                self.send_header(
+                    "Content-Disposition",
+                    'attachment; filename="%s"'
+                    % safe_name
+                )
+
+                self.send_header(
+                    "Content-Length",
+                    str(
+                        file_size
+                    )
+                )
+
+                self.send_header(
+                    "Cache-Control",
+                    "no-store"
+                )
+
+                self.end_headers()
+
+                with open(
+                    file_path,
+                    "rb"
+                ) as fh:
+
+                    while True:
+
+                        chunk = fh.read(
+                            1024 * 1024
+                        )
+
+                        if not chunk:
+                            break
+
+                        self.wfile.write(
+                            chunk
+                        )
+
+            except Exception as exc:
+
+                self.send_error(
+                    404,
+                    str(exc)
+                )
+
+            return
+
+
         if path == "/update-status":
 
             payload = (
@@ -22753,7 +22894,9 @@ class Handler(BaseHTTPRequestHandler):
                     (
                         "Smart Optimizer v%s downloaded "
                         "and SHA-256 verified. "
-                        "The updater will continue automatically."
+                        "Use Download verified SPK below, then install "
+                        "it over the current version in DSM Package Center "
+                        "> Manual Install."
                     )
                     % target
                 )
