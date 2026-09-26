@@ -78,13 +78,32 @@ UPDATE_RELEASE_API = (
     + "/releases/latest"
 )
 
+SMART_OPTIMIZER_PACKAGE_VAR = (
+    str(
+        os.environ.get(
+            "SMART_OPTIMIZER_PACKAGE_VAR",
+            ""
+        )
+        or ""
+    )
+    .strip()
+)
+
+
 UPDATE_DIR = os.environ.get(
     "SMART_OPTIMIZER_UPDATE_DIR",
-    os.path.join(
-        os.path.dirname(
-            CONTROL_FILE
-        ),
-        "updates"
+    (
+        os.path.join(
+            SMART_OPTIMIZER_PACKAGE_VAR,
+            "updates"
+        )
+        if SMART_OPTIMIZER_PACKAGE_VAR
+        else os.path.join(
+            os.path.dirname(
+                CONTROL_FILE
+            ),
+            "updates"
+        )
     )
 )
 
@@ -1144,7 +1163,7 @@ body{
 
 </style>
 
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico?v=2">
 </head>
 
 
@@ -7120,7 +7139,7 @@ def exclusions_page(app):
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>%s exclusions</title>
 <style>%s</style>
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico?v=2">
 </head>
 <body>
 <div class="shell">
@@ -16099,7 +16118,7 @@ body.smart-home{
 
 </style>
 
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico?v=2">
 </head>
 
 
@@ -17596,7 +17615,41 @@ def updates_page(
     )
 
 
-    if SMART_SELF_UPDATE_MODE == "app-bundle":
+    if (
+        SMART_SELF_UPDATE_MODE == "app-bundle"
+        and runtime_state
+        in (
+            "queued",
+            "installing",
+        )
+    ):
+
+        update_action = (
+            "<button "
+            "id='updateButton' "
+            "class='update-btn' "
+            "type='button' "
+            "disabled>"
+            "Updating…"
+            "</button>"
+        )
+
+    elif (
+        SMART_SELF_UPDATE_MODE == "app-bundle"
+        and not available
+    ):
+
+        update_action = (
+            "<button "
+            "id='updateButton' "
+            "class='update-btn' "
+            "type='button' "
+            "disabled>"
+            "Up to date"
+            "</button>"
+        )
+
+    elif SMART_SELF_UPDATE_MODE == "app-bundle":
 
         update_action = (
             "<form "
@@ -18165,7 +18218,7 @@ body.updatebody{
 }
 
 </style>
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico?v=2">
 </head>
 
 
@@ -19852,7 +19905,7 @@ body.settingsbody{
 
 
 </style>
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico?v=2">
 </head>
 <body class="settingsbody">
 
@@ -19977,7 +20030,7 @@ def history_page(app):
         rows = ""
         err = "<div class='notice bad'>%s API error: %s</div>" % (app.capitalize(), html.escape(str(exc)))
         title, noun = app.capitalize() + " history", "items"
-    return _smart_expand_common("""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer UI · %s</title><style>%s</style>  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico">
+    return _smart_expand_common("""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer UI · %s</title><style>%s</style>  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico?v=2">
 </head><body><div class="shell">
 <div class="topbar compact"><div class="brand"><div class="brandcopy"><h1>%s</h1><div>Complete observed upgrade history available in the loaded API history window.</div></div></div><div class="nav"><a class="badge" href="/%s">← Back to dashboard</a></div></div>
 %s
@@ -22573,7 +22626,7 @@ class Handler(BaseHTTPRequestHandler):
 
             self.send_header(
                 "Cache-Control",
-                "public, max-age=86400"
+                "no-store"
             )
 
             self.end_headers()
@@ -23104,22 +23157,32 @@ class Handler(BaseHTTPRequestHandler):
 
                 if SMART_SELF_UPDATE_MODE == "app-bundle":
 
-                    update_message = (
-                        "Smart Optimizer v%s downloaded and SHA-256 "
-                        "verified. Installing automatically; the web UI "
-                        "will restart briefly."
-                        % target
+                    self.send_response(
+                        303
                     )
 
-                else:
-
-                    update_message = (
-                        "Smart Optimizer v%s downloaded and SHA-256 "
-                        "verified. Use Download verified SPK below, then "
-                        "install it over the current version in DSM "
-                        "Package Center > Manual Install."
-                        % target
+                    self.send_header(
+                        "Location",
+                        "/updates?refresh=1"
                     )
+
+                    self.send_header(
+                        "Cache-Control",
+                        "no-store"
+                    )
+
+                    self.end_headers()
+
+                    return
+
+
+                update_message = (
+                    "Smart Optimizer v%s downloaded and SHA-256 "
+                    "verified. Use Download verified SPK below, then "
+                    "install it over the current version in DSM "
+                    "Package Center > Manual Install."
+                    % target
+                )
 
 
                 rendered = updates_page(
