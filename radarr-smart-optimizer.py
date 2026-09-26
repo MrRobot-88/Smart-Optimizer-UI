@@ -77,6 +77,1335 @@ def load_runtime_controls():
 MIN_SAVING_PERCENT, MAX_SAVING_PERCENT, DAILY_EXTRA_BUDGET = load_runtime_controls()
 
 
+# SMART SELECTABLE RADARR RULES START
+
+RADARR_RULE_KEYS = (
+    "storage_optimization",
+    "uhd_upgrade",
+    "prefer_dynamic_range",
+    "prefer_atmos",
+    "prefer_audio_channels",
+    "prefer_torrentleech",
+    "prefer_x265",
+    "block_av1",
+)
+
+# SMART RUNTIME RULES LKG V1 START
+
+_LAST_GOOD_RULES = None
+
+
+def runtime_rules():
+
+    global _LAST_GOOD_RULES
+
+    try:
+
+        with open(
+            CONTROL_FILE,
+            "r",
+            encoding="utf-8",
+        ) as f:
+
+            data = (
+                json.load(f)
+                or {}
+            )
+
+
+        raw = (
+            (
+                data.get(
+                    "radarr",
+                    {}
+                )
+                or {}
+            ).get(
+                "rules"
+            )
+            or {}
+        )
+
+
+        if not isinstance(
+            raw,
+            dict
+        ):
+            raise ValueError(
+                "rules is not an object"
+            )
+
+
+        rules = {
+            key: bool(
+                raw.get(
+                    key,
+                    False
+                )
+            )
+            for key
+            in RADARR_RULE_KEYS
+        }
+
+
+        _LAST_GOOD_RULES = dict(
+            rules
+        )
+
+        return rules
+
+
+    except Exception:
+
+        if (
+            _LAST_GOOD_RULES
+            is not None
+        ):
+
+            return dict(
+                _LAST_GOOD_RULES
+            )
+
+
+        # Fresh install / first unreadable read:
+        # optional rules safely default OFF.
+        return {
+            key: False
+            for key
+            in RADARR_RULE_KEYS
+        }
+
+
+# SMART RUNTIME RULES LKG V1 END
+
+
+# SMART RADARR ADVANCED PREFERENCES V2 START
+
+RADARR_ADVANCED_BOOL_KEYS = (
+    "prefer_remux",
+    "prefer_bluray",
+    "prefer_webdl",
+    "prefer_webrip",
+    "prefer_hdtv",
+    "prefer_hdr10plus",
+    "prefer_10bit",
+    "prefer_dtsx",
+    "prefer_lossless_audio",
+    "prefer_eac3",
+    "prefer_proper_repack",
+    "prefer_freeleech",
+    "prefer_smaller",
+    "prefer_seeders",
+)
+
+RADARR_ADVANCED_CODEC_VALUES = (
+    "none",
+    "x265",
+    "x264",
+    "av1",
+)
+
+_LAST_GOOD_RADARR_ADVANCED = None
+
+
+def runtime_advanced_preferences():
+
+    global _LAST_GOOD_RADARR_ADVANCED
+
+    defaults = {
+        key: False
+        for key
+        in RADARR_ADVANCED_BOOL_KEYS
+    }
+
+    defaults[
+        "codec_preference"
+    ] = "none"
+
+    defaults[
+        "indexer_priority"
+    ] = []
+
+
+    try:
+
+        with open(
+            CONTROL_FILE,
+            "r",
+            encoding="utf-8",
+        ) as f:
+
+            data = (
+                json.load(f)
+                or {}
+            )
+
+
+        raw = (
+            (
+                data.get(
+                    "radarr",
+                    {}
+                )
+                or {}
+            ).get(
+                "advanced_preferences",
+                {}
+            )
+            or {}
+        )
+
+
+        if not isinstance(
+            raw,
+            dict
+        ):
+            raise ValueError(
+                "advanced_preferences is not an object"
+            )
+
+
+        result = dict(
+            defaults
+        )
+
+
+        for key in (
+            RADARR_ADVANCED_BOOL_KEYS
+        ):
+
+            result[key] = bool(
+                raw.get(
+                    key,
+                    defaults[key]
+                )
+            )
+
+
+        codec = str(
+            raw.get(
+                "codec_preference",
+                "none"
+            )
+            or "none"
+        ).lower()
+
+
+        if codec not in (
+            RADARR_ADVANCED_CODEC_VALUES
+        ):
+            codec = "none"
+
+
+        result[
+            "codec_preference"
+        ] = codec
+
+
+        names = (
+            raw.get(
+                "indexer_priority"
+            )
+            or []
+        )
+
+
+        if not isinstance(
+            names,
+            list
+        ):
+            names = []
+
+
+        cleaned = []
+
+        for name in names:
+
+            value = str(
+                name
+                or ""
+            ).strip()
+
+            if (
+                value
+                and value not in cleaned
+            ):
+
+                cleaned.append(
+                    value[:200]
+                )
+
+            if len(cleaned) >= 100:
+                break
+
+
+        result[
+            "indexer_priority"
+        ] = cleaned
+
+
+        _LAST_GOOD_RADARR_ADVANCED = {
+            **result,
+
+            "indexer_priority":
+                list(
+                    result[
+                        "indexer_priority"
+                    ]
+                ),
+        }
+
+
+        return result
+
+
+    except Exception:
+
+        if (
+            _LAST_GOOD_RADARR_ADVANCED
+            is not None
+        ):
+
+            return {
+                **_LAST_GOOD_RADARR_ADVANCED,
+
+                "indexer_priority":
+                    list(
+                        _LAST_GOOD_RADARR_ADVANCED[
+                            "indexer_priority"
+                        ]
+                    ),
+            }
+
+
+        return defaults
+
+
+def optimizer_normalize_indexer(
+    value
+):
+
+    value = str(
+        value
+        or ""
+    ).strip().casefold()
+
+
+    if value.endswith(
+        "(prowlarr)"
+    ):
+
+        value = value[
+            :-len("(prowlarr)")
+        ].strip()
+
+
+    return "".join(
+        char
+        for char in value
+        if char.isalnum()
+    )
+
+
+def optimizer_indexer_rank(
+    choice,
+    preferences,
+):
+
+    wanted = []
+
+    for name in (
+        preferences.get(
+            "indexer_priority"
+        )
+        or []
+    ):
+
+        normalized = (
+            optimizer_normalize_indexer(
+                name
+            )
+        )
+
+        if (
+            normalized
+            and normalized not in wanted
+        ):
+            wanted.append(
+                normalized
+            )
+
+
+    if not wanted:
+        return 0
+
+
+    actual = (
+        optimizer_normalize_indexer(
+            choice.get(
+                "indexer"
+            )
+        )
+    )
+
+
+    for position, name in enumerate(
+        wanted
+    ):
+
+        if actual == name:
+            return position
+
+
+    return len(
+        wanted
+    )
+
+
+def optimizer_source_type(
+    choice
+):
+
+    title = str(
+        choice.get(
+            "title"
+        )
+        or ""
+    ).upper()
+
+
+    if "REMUX" in title:
+        return "remux"
+
+
+    if any(
+        token in title
+        for token in (
+            "BLURAY",
+            "BLU-RAY",
+            "BDRIP",
+            "BD-RIP",
+        )
+    ):
+        return "bluray"
+
+
+    if any(
+        token in title
+        for token in (
+            "WEB-DL",
+            "WEBDL",
+            "WEB.DL",
+        )
+    ):
+        return "webdl"
+
+
+    if any(
+        token in title
+        for token in (
+            "WEBRIP",
+            "WEB-RIP",
+            "WEB.RIP",
+        )
+    ):
+        return "webrip"
+
+
+    if "HDTV" in title:
+        return "hdtv"
+
+
+    return "other"
+
+
+def optimizer_source_rank(
+    choice,
+    preferences,
+):
+
+    source = (
+        optimizer_source_type(
+            choice
+        )
+    )
+
+    enabled = []
+
+    for key, name in (
+        (
+            "prefer_remux",
+            "remux"
+        ),
+        (
+            "prefer_bluray",
+            "bluray"
+        ),
+        (
+            "prefer_webdl",
+            "webdl"
+        ),
+        (
+            "prefer_webrip",
+            "webrip"
+        ),
+        (
+            "prefer_hdtv",
+            "hdtv"
+        ),
+    ):
+
+        if preferences.get(key):
+            enabled.append(
+                name
+            )
+
+
+    if not enabled:
+        return 0
+
+
+    try:
+
+        return enabled.index(
+            source
+        )
+
+    except ValueError:
+
+        return len(
+            enabled
+        )
+
+
+def optimizer_title_has(
+    choice,
+    tokens,
+):
+
+    title = str(
+        choice.get(
+            "title"
+        )
+        or ""
+    ).upper()
+
+
+    return any(
+        token in title
+        for token in tokens
+    )
+
+
+def optimizer_is_hdr10plus(
+    choice
+):
+
+    return optimizer_title_has(
+        choice,
+        (
+            "HDR10+",
+            "HDR10PLUS",
+            "HDR10 PLUS",
+        )
+    )
+
+
+def optimizer_is_10bit(
+    choice
+):
+
+    return optimizer_title_has(
+        choice,
+        (
+            "10BIT",
+            "10-BIT",
+            "10.BIT",
+        )
+    )
+
+
+def optimizer_is_dtsx(
+    choice
+):
+
+    return optimizer_title_has(
+        choice,
+        (
+            "DTS:X",
+            "DTS-X",
+            "DTS.X",
+        )
+    )
+
+
+def optimizer_is_lossless_audio(
+    choice
+):
+
+    return optimizer_title_has(
+        choice,
+        (
+            "TRUEHD",
+            "TRUE-HD",
+            "DTS-HD MA",
+            "DTS.HD.MA",
+            "DTSHDMA",
+        )
+    )
+
+
+def optimizer_is_eac3(
+    choice
+):
+
+    return optimizer_title_has(
+        choice,
+        (
+            "EAC3",
+            "E-AC-3",
+            "E.AC3",
+            "DD+",
+            "DDP",
+        )
+    )
+
+
+def optimizer_is_proper_repack(
+    choice
+):
+
+    return optimizer_title_has(
+        choice,
+        (
+            "PROPER",
+            "REPACK",
+        )
+    )
+
+
+def optimizer_is_freeleech(
+    choice
+):
+
+    release = (
+        choice.get(
+            "release"
+        )
+        or {}
+    )
+
+
+    value = release.get(
+        "downloadVolumeFactor"
+    )
+
+
+    if value is None:
+        return False
+
+
+    try:
+
+        return float(
+            value
+        ) == 0.0
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return False
+
+
+def optimizer_codec_rank(
+    choice,
+    preferences,
+):
+
+    wanted = str(
+        preferences.get(
+            "codec_preference",
+            "none"
+        )
+        or "none"
+    ).lower()
+
+
+    if wanted == "none":
+        return 0
+
+
+    actual = str(
+        choice.get(
+            "codec"
+        )
+        or ""
+    ).lower()
+
+
+    aliases = {
+        "hevc": "x265",
+        "h265": "x265",
+        "h.265": "x265",
+        "avc": "x264",
+        "h264": "x264",
+        "h.264": "x264",
+    }
+
+
+    actual = aliases.get(
+        actual,
+        actual
+    )
+
+
+    return (
+        0
+        if actual == wanted
+        else 1
+    )
+
+
+def optimizer_boolean_rank(
+    enabled,
+    matches,
+):
+
+    if not enabled:
+        return 0
+
+
+    return (
+        0
+        if matches
+        else 1
+    )
+
+
+# SMART RADARR ADVANCED PREFERENCES V2 END
+
+
+
+def radarr_policy_upgrade_targets(
+    item,
+    policy=None,
+):
+    policy = (
+        policy
+        or runtime_resolution_policy()
+    )
+
+    paths = policy["paths"]
+
+    resolution = int(
+        item.get("resolution")
+        or 0
+    )
+
+    profile_id = int(
+        item.get("profile_id")
+        or 0
+    )
+
+    targets = []
+
+
+    if (
+        resolution == 720
+        and paths.get("720_to_1080")
+    ):
+        targets.append(1080)
+
+
+    # Keep the existing UHD-profile safety model for 2160p.
+    if (
+        resolution == 720
+        and profile_id == UHD_PROFILE_ID
+        and paths.get("720_to_2160")
+    ):
+        targets.append(2160)
+
+
+    if (
+        resolution == 1080
+        and profile_id == UHD_PROFILE_ID
+        and paths.get("1080_to_2160")
+    ):
+        targets.append(2160)
+
+
+    return tuple(
+        sorted(
+            set(targets)
+        )
+    )
+
+
+def radarr_min_current_mib(
+    policy=None,
+):
+    policy = (
+        policy
+        or runtime_resolution_policy()
+    )
+
+    setting = (
+        policy["limits"]
+        ["minimum_current_size"]
+    )
+
+    if not setting.get("enabled"):
+        return None
+
+    return policy_size_mib(
+        setting
+    )
+
+
+def radarr_item_enabled_by_rules(item):
+    rules = runtime_rules()
+    policy = runtime_resolution_policy()
+
+    resolution = int(
+        item.get("resolution")
+        or 0
+    )
+
+    if resolution not in (
+        720,
+        1080,
+        2160,
+    ):
+        return False
+
+    upgrade_targets = (
+        radarr_policy_upgrade_targets(
+            item,
+            policy
+        )
+    )
+
+
+    # Existing same-resolution storage optimization remains
+    # available for 1080p and 2160p.
+    if (
+        resolution in (1080, 2160)
+        and rules.get(
+            "storage_optimization"
+        )
+    ):
+        return True
+
+
+    # 720p becomes eligible only through an explicitly enabled
+    # upgrade path.
+    return bool(
+        upgrade_targets
+    )
+
+
+# SMART RADARR FLEXIBLE ELIGIBILITY V1
+
+
+def radarr_has_target_rule(rules=None):
+    rules = (
+        rules
+        or runtime_rules()
+    )
+
+    policy = runtime_resolution_policy()
+    paths = policy["paths"]
+
+    return bool(
+        rules.get(
+            "storage_optimization"
+        )
+        or paths.get(
+            "720_to_1080"
+        )
+        or paths.get(
+            "720_to_2160"
+        )
+        or paths.get(
+            "1080_to_2160"
+        )
+    )
+
+
+def radarr_target_rule_signature(rules=None):
+    rules = (
+        rules
+        or runtime_rules()
+    )
+
+    policy = runtime_resolution_policy()
+    paths = policy["paths"]
+
+    minimum = (
+        policy["limits"]
+        ["minimum_current_size"]
+    )
+
+    minimum_mib = (
+        policy_size_mib(minimum)
+        if minimum.get("enabled")
+        else 0.0
+    )
+
+    return (
+        "storage=%d|"
+        "720_1080=%d|"
+        "720_2160=%d|"
+        "1080_2160=%d|"
+        "min_enabled=%d|"
+        "min_mib=%.3f"
+        % (
+            int(
+                bool(
+                    rules.get(
+                        "storage_optimization"
+                    )
+                )
+            ),
+            int(
+                bool(
+                    paths.get(
+                        "720_to_1080"
+                    )
+                )
+            ),
+            int(
+                bool(
+                    paths.get(
+                        "720_to_2160"
+                    )
+                )
+            ),
+            int(
+                bool(
+                    paths.get(
+                        "1080_to_2160"
+                    )
+                )
+            ),
+            int(
+                bool(
+                    minimum.get(
+                        "enabled"
+                    )
+                )
+            ),
+            minimum_mib,
+        )
+    )
+
+
+def sync_radarr_target_rules(state):
+    rules = runtime_rules()
+    signature = radarr_target_rule_signature(rules)
+    previous = state.get("target_rules_signature")
+
+    if previous is None:
+        state["target_rules_signature"] = signature
+
+        if LIVE:
+            save_state(state)
+
+    elif previous != signature:
+        state["target_rules_signature"] = signature
+        state["movie_cursor"] = 0
+
+        if LIVE:
+            save_state(state)
+
+        print(
+            "RULE CHANGE: Radarr A-Z cursor reset.",
+            flush=True
+        )
+
+    return rules
+
+
+# SMART RADARR TARGET RULE SYNC
+
+# SMART SELECTABLE RADARR RULES END
+
+# SMART RADARR RESOLUTION POLICY START
+
+_LAST_GOOD_RESOLUTION_POLICY = None
+
+
+def runtime_resolution_policy():
+    global _LAST_GOOD_RESOLUTION_POLICY
+
+
+    def clean_size_limit(
+        raw,
+        default_value,
+        default_unit,
+    ):
+        raw = (
+            raw
+            if isinstance(raw, dict)
+            else {}
+        )
+
+        try:
+            value = float(
+                raw.get(
+                    "value",
+                    default_value
+                )
+            )
+
+            if value < 0:
+                raise ValueError
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+            value = float(
+                default_value
+            )
+
+        unit = str(
+            raw.get(
+                "unit",
+                default_unit
+            )
+        ).strip()
+
+        if unit not in (
+            "MiB",
+            "GiB",
+        ):
+            unit = default_unit
+
+        return {
+            "enabled": bool(
+                raw.get(
+                    "enabled",
+                    False
+                )
+            ),
+
+            "value": value,
+
+            "unit": unit,
+        }
+
+
+    def clean_growth_range(
+        raw,
+        default_min,
+        default_max,
+    ):
+        raw = (
+            raw
+            if isinstance(raw, dict)
+            else {}
+        )
+
+        try:
+            minimum = float(
+                raw.get(
+                    "min_percent",
+                    default_min
+                )
+            )
+
+            maximum = float(
+                raw.get(
+                    "max_percent",
+                    default_max
+                )
+            )
+
+            if (
+                minimum < 0
+                or maximum < 0
+                or minimum > maximum
+            ):
+                raise ValueError
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+            minimum = float(
+                default_min
+            )
+
+            maximum = float(
+                default_max
+            )
+
+        return {
+            "enabled": bool(
+                raw.get(
+                    "enabled",
+                    False
+                )
+            ),
+
+            "min_percent": minimum,
+
+            "max_percent": maximum,
+        }
+
+
+    try:
+
+        with open(
+            CONTROL_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            data = json.load(f) or {}
+
+
+        raw = (
+            (data.get("radarr", {}) or {})
+            .get(
+                "resolution_policy",
+                {}
+            )
+            or {}
+        )
+
+
+        raw_paths = (
+            raw.get("paths")
+            or {}
+        )
+
+        raw_limits = (
+            raw.get("limits")
+            or {}
+        )
+
+        raw_growth = (
+            raw.get("upgrade_growth")
+            or {}
+        )
+
+
+        policy = {
+
+            "paths": {
+
+                "720_to_1080": bool(
+                    raw_paths.get(
+                        "720_to_1080",
+                        False
+                    )
+                ),
+
+                "720_to_2160": bool(
+                    raw_paths.get(
+                        "720_to_2160",
+                        False
+                    )
+                ),
+
+                "1080_to_2160": bool(
+                    raw_paths.get(
+                        "1080_to_2160",
+                        False
+                    )
+                ),
+            },
+
+
+            "limits": {
+
+                "minimum_current_size":
+                    clean_size_limit(
+                        raw_limits.get(
+                            "minimum_current_size"
+                        ),
+                        0,
+                        "MiB",
+                    ),
+
+                "maximum_1080_size":
+                    clean_size_limit(
+                        raw_limits.get(
+                            "maximum_1080_size"
+                        ),
+                        10,
+                        "GiB",
+                    ),
+
+                "maximum_2160_size":
+                    clean_size_limit(
+                        raw_limits.get(
+                            "maximum_2160_size"
+                        ),
+                        20,
+                        "GiB",
+                    ),
+            },
+
+
+            "upgrade_growth": {
+
+                "720_to_1080":
+                    clean_growth_range(
+                        raw_growth.get(
+                            "720_to_1080"
+                        ),
+                        0,
+                        40,
+                    ),
+
+                "720_to_2160":
+                    clean_growth_range(
+                        raw_growth.get(
+                            "720_to_2160"
+                        ),
+                        0,
+                        100,
+                    ),
+
+                "1080_to_2160":
+                    clean_growth_range(
+                        raw_growth.get(
+                            "1080_to_2160"
+                        ),
+                        0,
+                        0,
+                    ),
+            },
+        }
+
+
+        _LAST_GOOD_RESOLUTION_POLICY = policy
+
+        return policy
+
+
+    except Exception:
+
+        if (
+            _LAST_GOOD_RESOLUTION_POLICY
+            is not None
+        ):
+            return (
+                _LAST_GOOD_RESOLUTION_POLICY
+            )
+
+
+        return {
+
+            "paths": {
+                "720_to_1080": False,
+                "720_to_2160": False,
+                "1080_to_2160": False,
+            },
+
+            "limits": {
+
+                "minimum_current_size": {
+                    "enabled": False,
+                    "value": 0.0,
+                    "unit": "MiB",
+                },
+
+                "maximum_1080_size": {
+                    "enabled": False,
+                    "value": 10.0,
+                    "unit": "GiB",
+                },
+
+                "maximum_2160_size": {
+                    "enabled": False,
+                    "value": 20.0,
+                    "unit": "GiB",
+                },
+            },
+
+            "upgrade_growth": {
+
+                "720_to_1080": {
+                    "enabled": False,
+                    "min_percent": 0.0,
+                    "max_percent": 40.0,
+                },
+
+                "720_to_2160": {
+                    "enabled": False,
+                    "min_percent": 0.0,
+                    "max_percent": 100.0,
+                },
+
+                "1080_to_2160": {
+                    "enabled": False,
+                    "min_percent": 0.0,
+                    "max_percent": 0.0,
+                },
+            },
+        }
+
+
+def policy_size_mib(setting):
+
+    value = float(
+        setting.get(
+            "value",
+            0
+        )
+        or 0
+    )
+
+    if (
+        setting.get("unit")
+        == "GiB"
+    ):
+        return (
+            value
+            * 1024.0
+        )
+
+    return value
+
+
+def upgrade_growth_percent(
+    old_size_mib,
+    new_size_mib,
+):
+
+    old_size_mib = float(
+        old_size_mib
+    )
+
+    new_size_mib = float(
+        new_size_mib
+    )
+
+    if old_size_mib <= 0:
+        return None
+
+    return (
+        (
+            new_size_mib
+            - old_size_mib
+        )
+        / old_size_mib
+        * 100.0
+    )
+
+
+# SMART RADARR RESOLUTION POLICY END
+
+
+
+
+
 # Don't deliberately grab the exact same release again for this long
 ATTEMPT_COOLDOWN_DAYS = 365
 
@@ -950,17 +2279,56 @@ def movie_item(movie, state, queued_ids):
     if size_bytes <= 0:
         return None
 
-    # Do not spend searches/downloads optimizing already-small movies.
-    # 5 GiB is based on the CURRENT file, not the replacement candidate.
-    if size_bytes < 5 * 1024 ** 3:
+    policy = runtime_resolution_policy()
+
+    current_size_mib = mib(
+        size_bytes
+    )
+
+    minimum_mib = radarr_min_current_mib(
+        policy
+    )
+
+    if (
+        minimum_mib is not None
+        and current_size_mib < minimum_mib
+    ):
         return None
 
-    resolution = file_resolution(movie_file)
-    if resolution not in (1080, 2160):
+
+    resolution = file_resolution(
+        movie_file
+    )
+
+    if resolution not in (
+        720,
+        1080,
+        2160,
+    ):
         return None
 
-    profile_id = movie.get("qualityProfileId")
-    target_resolution = 2160 if profile_id == UHD_PROFILE_ID else resolution
+
+    profile_id = movie.get(
+        "qualityProfileId"
+    )
+
+
+    upgrade_targets = (
+        radarr_policy_upgrade_targets(
+            {
+                "resolution": resolution,
+                "profile_id": profile_id,
+            },
+            policy
+        )
+    )
+
+
+    target_resolution = (
+        max(upgrade_targets)
+        if upgrade_targets
+        else resolution
+    )
 
     return {
         "movie_id": movie_id,
@@ -1005,7 +2373,11 @@ def next_movie_item(state, movies_by_id, queued_ids):
             continue
 
         item = movie_item(movie, state, queued_ids)
-        if item is not None:
+
+        if (
+            item is not None
+            and radarr_item_enabled_by_rules(item)
+        ):
             return item
     return None
 
@@ -1071,26 +2443,56 @@ def collect_candidates(state, queued_ids):
         if size_bytes <= 0:
             continue
 
-        # Keep candidate collection consistent with movie_item():
-        # current files below 5 GiB are not optimizer targets.
-        if size_bytes < 5 * 1024 ** 3:
+        policy = runtime_resolution_policy()
+
+        current_size_mib = mib(
+            size_bytes
+        )
+
+        minimum_mib = radarr_min_current_mib(
+            policy
+        )
+
+        if (
+            minimum_mib is not None
+            and current_size_mib < minimum_mib
+        ):
             continue
 
-        resolution = file_resolution(movie_file)
-        if not resolution:
+
+        resolution = file_resolution(
+            movie_file
+        )
+
+        if resolution not in (
+            720,
+            1080,
+            2160,
+        ):
             continue
 
-        # Optimize actual 1080p and 2160p files regardless of
-        # the Radarr quality profile assigned to the movie.
-        # Ignore 720p and lower.
-        if resolution not in (1080, 2160):
-            continue
 
-        profile_id = movie.get("qualityProfileId")
+        profile_id = movie.get(
+            "qualityProfileId"
+        )
 
-        # Normal profiles keep their current resolution.
-        # UHD-profile movies may upgrade an existing 1080p file to 2160p.
-        target_resolution = 2160 if profile_id == UHD_PROFILE_ID else resolution
+
+        upgrade_targets = (
+            radarr_policy_upgrade_targets(
+                {
+                    "resolution": resolution,
+                    "profile_id": profile_id,
+                },
+                policy
+            )
+        )
+
+
+        target_resolution = (
+            max(upgrade_targets)
+            if upgrade_targets
+            else resolution
+        )
 
         media = movie_file.get("mediaInfo") or {}
 
@@ -1362,6 +2764,87 @@ def radarr_cut_replacement_allowed(item, release):
     )
 
 
+
+def radarr_upgrade_path_key(
+    old_resolution,
+    new_resolution,
+):
+    pair = (
+        int(old_resolution),
+        int(new_resolution),
+    )
+
+    return {
+        (720, 1080): "720_to_1080",
+        (720, 2160): "720_to_2160",
+        (1080, 2160): "1080_to_2160",
+    }.get(pair)
+
+
+def radarr_candidate_max_mib(
+    resolution,
+    policy=None,
+):
+    policy = (
+        policy
+        or runtime_resolution_policy()
+    )
+
+    key = {
+        1080: "maximum_1080_size",
+        2160: "maximum_2160_size",
+    }.get(
+        int(resolution)
+    )
+
+    if not key:
+        return None
+
+    setting = (
+        policy["limits"]
+        [key]
+    )
+
+    if not setting.get("enabled"):
+        return None
+
+    return policy_size_mib(
+        setting
+    )
+
+
+def radarr_upgrade_growth_range(
+    old_resolution,
+    new_resolution,
+    policy=None,
+):
+    policy = (
+        policy
+        or runtime_resolution_policy()
+    )
+
+    key = radarr_upgrade_path_key(
+        old_resolution,
+        new_resolution,
+    )
+
+    if not key:
+        return None
+
+    setting = (
+        policy["upgrade_growth"]
+        .get(key)
+    )
+
+    if not setting:
+        return None
+
+    return setting
+
+
+# SMART RADARR FLEXIBLE CANDIDATE POLICY V1
+
+
 def evaluate_release(item, release, state):
     title = release.get("title") or ""
 
@@ -1401,16 +2884,51 @@ def evaluate_release(item, release, state):
     if not candidate_resolution:
         return None, "unknown resolution"
 
-    current_resolution = item["resolution"]
+    current_resolution = int(
+        item["resolution"]
+    )
+
+    candidate_resolution = int(
+        candidate_resolution
+    )
+
+    rules = runtime_rules()
+    policy = runtime_resolution_policy()
+
 
     # Never downgrade resolution.
     if candidate_resolution < current_resolution:
         return None, "resolution downgrade"
 
-    # Higher resolution is only allowed toward the UHD target.
-    if candidate_resolution > current_resolution:
-        if item["target_resolution"] != 2160 or candidate_resolution != 2160:
-            return None, "resolution upgrade not allowed"
+
+    if candidate_resolution == current_resolution:
+
+        # 720p same-resolution optimization is not part of the
+        # current policy model. 720p participates through an
+        # explicitly enabled upgrade path.
+        if current_resolution == 720:
+            return None, "720p same-resolution optimization disabled"
+
+        if not rules.get(
+            "storage_optimization"
+        ):
+            return None, "storage optimization disabled"
+
+
+    else:
+
+        allowed_targets = (
+            radarr_policy_upgrade_targets(
+                item,
+                policy
+            )
+        )
+
+        if (
+            candidate_resolution
+            not in allowed_targets
+        ):
+            return None, "resolution upgrade path disabled"
 
     size_bytes = release.get("size") or 0
     try:
@@ -1424,73 +2942,240 @@ def evaluate_release(item, release, state):
     candidate_mib = mib(size_bytes)
     current_mib = item["size_mib"]
 
-    # ABSOLUTE STORAGE INVARIANT:
-    # A replacement is NEVER allowed to be larger than the file already in
-    # the library, regardless of resolution upgrade, profile or monitored
-    # state. 0% growth tolerance means equal size is the absolute ceiling;
-    # the normal minimum-saving rule below is still stricter in practice.
+    # ========================================================
+    # FLEXIBLE SIZE POLICY
+    #
+    # Same-resolution replacement:
+    #     must downsize inside the normal Downsize range.
+    #
+    # Resolution upgrade:
+    #     smaller  -> normal Downsize range
+    #     equal    -> 0% growth
+    #     larger   -> selected path's Growth range
+    #
+    # Optional absolute ceilings are applied by TARGET resolution.
+    # ========================================================
+
     SIZE_EPSILON_MIB = 1e-6
+    PERCENT_EPSILON = 1e-6
 
-    if candidate_mib > current_mib + SIZE_EPSILON_MIB:
-        print(
-            "    ABSOLUTE SIZE RULE: candidate %.1f MiB > current %.1f MiB | REJECT"
-            % (candidate_mib, current_mib),
-            flush=True
-        )
-        return None, "candidate larger than current file"
 
-    # 1080p movie downloads should stay compact even when the current file is
-    # very large. Prefer ranking still chooses smaller qualifying releases.
-    MAX_1080P_REPLACEMENT_MIB = 10 * 1024
+    maximum_mib = radarr_candidate_max_mib(
+        candidate_resolution,
+        policy
+    )
 
     if (
-        candidate_resolution == 1080
-        and candidate_mib > MAX_1080P_REPLACEMENT_MIB + SIZE_EPSILON_MIB
+        maximum_mib is not None
+        and candidate_mib
+        > maximum_mib + SIZE_EPSILON_MIB
     ):
         print(
-            "    1080P SIZE CEILING: %.2f GiB > 10.00 GiB | REJECT"
-            % (candidate_mib / 1024.0),
+            "    TARGET SIZE CEILING: "
+            "%.1f MiB > %.1f MiB for %dp | REJECT"
+            % (
+                candidate_mib,
+                maximum_mib,
+                candidate_resolution,
+            ),
             flush=True
         )
-        return None, "1080p candidate above 10 GiB ceiling"
 
-    saving = ((current_mib - candidate_mib) / current_mib) * 100.0
-
-    # Storage-first policy applies to EVERY replacement, including 1080p -> 2160p.
-    # A candidate must save meaningful space, but an extreme reduction is rejected
-    # as a compression/quality-risk guardrail.
-    # Tiny tolerance prevents floating-point conversion noise from rejecting
-    # a candidate that is mathematically exactly on the configured boundary.
-    SAVING_EPSILON = 1e-6
-
-    if saving < MIN_SAVING_PERCENT - SAVING_EPSILON:
-        print(
-            "    SIZE RULE: %.3f%% saving | allowed %.1f%%-%.1f%% | REJECT: below minimum"
-            % (saving, MIN_SAVING_PERCENT, MAX_SAVING_PERCENT),
-            flush=True
+        return (
+            None,
+            "%dp candidate above configured size ceiling"
+            % candidate_resolution
         )
-        return None, "candidate does not save enough space"
 
-    if saving > MAX_SAVING_PERCENT + SAVING_EPSILON:
-        print(
-            "    SIZE RULE: %.3f%% saving | allowed %.1f%%-%.1f%% | REJECT: above maximum"
-            % (saving, MIN_SAVING_PERCENT, MAX_SAVING_PERCENT),
-            flush=True
-        )
-        return None, "candidate saves too much space (quality-risk guardrail)"
 
-    print(
-        "    SIZE RULE: %.3f%% saving | allowed %.1f%%-%.1f%% | PASS"
-        % (saving, MIN_SAVING_PERCENT, MAX_SAVING_PERCENT),
-        flush=True
+    is_upgrade = (
+        candidate_resolution
+        > current_resolution
     )
+
+
+    # Candidate actually SHRINKS.
+    if (
+        candidate_mib
+        < current_mib - SIZE_EPSILON_MIB
+    ):
+
+        saving = (
+            (
+                current_mib
+                - candidate_mib
+            )
+            / current_mib
+            * 100.0
+        )
+
+        if (
+            saving
+            < MIN_SAVING_PERCENT
+            - PERCENT_EPSILON
+        ):
+            print(
+                "    DOWNSIZE RULE: "
+                "%.3f%% saving | allowed %.1f%%-%.1f%% "
+                "| REJECT: below minimum"
+                % (
+                    saving,
+                    MIN_SAVING_PERCENT,
+                    MAX_SAVING_PERCENT,
+                ),
+                flush=True
+            )
+
+            return (
+                None,
+                "candidate does not save enough space"
+            )
+
+
+        if (
+            saving
+            > MAX_SAVING_PERCENT
+            + PERCENT_EPSILON
+        ):
+            print(
+                "    DOWNSIZE RULE: "
+                "%.3f%% saving | allowed %.1f%%-%.1f%% "
+                "| REJECT: above maximum"
+                % (
+                    saving,
+                    MIN_SAVING_PERCENT,
+                    MAX_SAVING_PERCENT,
+                ),
+                flush=True
+            )
+
+            return (
+                None,
+                "candidate saves too much space"
+            )
+
+
+        print(
+            "    DOWNSIZE RULE: "
+            "%.3f%% saving | allowed %.1f%%-%.1f%% | PASS"
+            % (
+                saving,
+                MIN_SAVING_PERCENT,
+                MAX_SAVING_PERCENT,
+            ),
+            flush=True
+        )
+
+
+    # Equal/larger is ONLY legal on an upgrade path.
+    else:
+
+        saving = (
+            (
+                current_mib
+                - candidate_mib
+            )
+            / current_mib
+            * 100.0
+        )
+
+        if not is_upgrade:
+            return (
+                None,
+                "same-resolution replacement is not smaller"
+            )
+
+
+        growth_setting = (
+            radarr_upgrade_growth_range(
+                current_resolution,
+                candidate_resolution,
+                policy
+            )
+        )
+
+        if (
+            not growth_setting
+            or not growth_setting.get(
+                "enabled"
+            )
+        ):
+            return (
+                None,
+                "upgrade growth disabled"
+            )
+
+
+        growth = max(
+            0.0,
+            upgrade_growth_percent(
+                current_mib,
+                candidate_mib,
+            )
+        )
+
+
+        minimum_growth = float(
+            growth_setting.get(
+                "min_percent",
+                0.0
+            )
+        )
+
+        maximum_growth = float(
+            growth_setting.get(
+                "max_percent",
+                0.0
+            )
+        )
+
+
+        if (
+            growth
+            < minimum_growth
+            - PERCENT_EPSILON
+            or growth
+            > maximum_growth
+            + PERCENT_EPSILON
+        ):
+            print(
+                "    UPGRADE GROWTH: "
+                "%.3f%% | allowed %.1f%%-%.1f%% | REJECT"
+                % (
+                    growth,
+                    minimum_growth,
+                    maximum_growth,
+                ),
+                flush=True
+            )
+
+            return (
+                None,
+                "upgrade growth outside configured range"
+            )
+
+
+        print(
+            "    UPGRADE GROWTH: "
+            "%.3f%% | allowed %.1f%%-%.1f%% | PASS"
+            % (
+                growth,
+                minimum_growth,
+                maximum_growth,
+            ),
+            flush=True
+        )
+
 
     candidate_codec = codec_from_text(title)
 
     # HARD COMPATIBILITY RULE:
     # AV1 replacements are disabled because the configured playback
     # environment is not guaranteed to support AV1.
-    if candidate_codec == "av1":
+    if (
+        candidate_codec == "av1"
+        and rules.get("block_av1")
+    ):
         print("    CODEC RULE: AV1 | REJECT: AV1 not allowed", flush=True)
         return None, "AV1 not allowed"
 
@@ -1535,65 +3220,294 @@ def choose_best(item, releases, state):
     accepted = []
 
     for release in releases:
-        choice, reason = evaluate_release(item, release, state)
+
+        choice, reason = evaluate_release(
+            item,
+            release,
+            state
+        )
+
         if choice:
-            accepted.append(choice)
+
+            accepted.append(
+                choice
+            )
+
 
     if not accepted:
         return None
 
-    current_res = item["resolution"]
 
-    # UHD profile: a valid higher-resolution candidate wins over
-    # same-resolution storage optimization.
-    higher = [x for x in accepted if x["resolution"] > current_res]
-    pool = higher if higher else [
-        x for x in accepted if x["resolution"] == current_res
+    current_res = int(
+        item["resolution"]
+    )
+
+    rules = runtime_rules()
+
+    preferences = (
+        runtime_advanced_preferences()
+    )
+
+    # SMART RADARR RANKING V2
+    #
+    # Hard eligibility and safety checks have already happened
+    # inside evaluate_release().
+    #
+    # Ranking order:
+    #
+    #   1. Highest valid upgrade resolution
+    #   2. Enabled source preference
+    #   3. Existing DR preference
+    #   4. Existing Atmos preference
+    #   5. Existing audio-channel preference
+    #   6. Ordered preferred indexers
+    #   7. HDR10+
+    #   8. 10-bit
+    #   9. DTS:X
+    #  10. Lossless audio
+    #  11. E-AC-3 / DD+
+    #  12. PROPER / REPACK
+    #  13. Freeleech
+    #  14. Smaller file
+    #  15. Preferred codec
+    #  16. More seeders
+    #  17. Title for deterministic tie-break
+    #
+    # Nonpreferred indexers remain valid fallbacks.
+
+
+    higher = [
+        candidate
+        for candidate in accepted
+        if int(
+            candidate.get(
+                "resolution",
+                0
+            )
+        ) > current_res
     ]
+
+
+    if higher:
+
+        highest_resolution = max(
+            int(
+                candidate.get(
+                    "resolution",
+                    0
+                )
+            )
+            for candidate in higher
+        )
+
+        pool = [
+            candidate
+            for candidate in higher
+            if int(
+                candidate.get(
+                    "resolution",
+                    0
+                )
+            ) == highest_resolution
+        ]
+
+
+    else:
+
+        pool = [
+            candidate
+            for candidate in accepted
+            if int(
+                candidate.get(
+                    "resolution",
+                    0
+                )
+            ) == current_res
+        ]
+
 
     if not pool:
         return None
 
-    # All candidates in this pool have already passed the hard safety gates.
-    #
-    # Preference order:
-    #   1. Dynamic range: DV+HDR > HDR > SDR/unknown
-    #   2. Atmos
-    #   3. Audio channel count
-    #   4. Smaller file
-    #   5. x265/HEVC
-    #   6. More seeders
-    #
-    # Hard protections still prevent losing existing HDR/DV, Atmos or
-    # channel count. These preferences only rank already-safe candidates.
+
     dr_rank = {
         "DV_HDR": 3,
         "HDR": 2,
-        "SDR_UNKNOWN": 1
+        "SDR_UNKNOWN": 1,
     }
 
-    def indexer_rank(choice):
-        name = (choice.get("indexer") or "").lower()
 
-        # Prefer TorrentLeech among candidates that already passed every
-        # optimizer safety gate. Public indexers remain valid fallbacks.
-        if "torrentleech" in name:
-            return 0
+    def rank(candidate):
 
-        return 1
+        return (
 
-    pool.sort(key=lambda x: (
-        -dr_rank.get(x.get("dynamic_range", "SDR_UNKNOWN"), 0),
-        -int(bool(x.get("atmos", False))),
-        -(x.get("audio_channels") or 0),
-        indexer_rank(x),
-        x["size_bytes"],
-        0 if x["codec"] == "x265" else 1,
-        -x["seeders"],
-        x["title"].lower()
-    ))
+            # Source type.
+            optimizer_source_rank(
+                candidate,
+                preferences
+            ),
+
+            # Existing dynamic-range preference.
+            (
+                -dr_rank.get(
+                    candidate.get(
+                        "dynamic_range",
+                        "SDR_UNKNOWN"
+                    ),
+                    0
+                )
+                if rules.get(
+                    "prefer_dynamic_range"
+                )
+                else 0
+            ),
+
+            # Existing Atmos preference.
+            (
+                -int(
+                    bool(
+                        candidate.get(
+                            "atmos",
+                            False
+                        )
+                    )
+                )
+                if rules.get(
+                    "prefer_atmos"
+                )
+                else 0
+            ),
+
+            # Existing channel-count preference.
+            (
+                -float(
+                    candidate.get(
+                        "audio_channels"
+                    )
+                    or 0
+                )
+                if rules.get(
+                    "prefer_audio_channels"
+                )
+                else 0
+            ),
+
+            # User-defined tracker/indexer order.
+            optimizer_indexer_rank(
+                candidate,
+                preferences
+            ),
+
+            optimizer_boolean_rank(
+                preferences.get(
+                    "prefer_hdr10plus"
+                ),
+                optimizer_is_hdr10plus(
+                    candidate
+                )
+            ),
+
+            optimizer_boolean_rank(
+                preferences.get(
+                    "prefer_10bit"
+                ),
+                optimizer_is_10bit(
+                    candidate
+                )
+            ),
+
+            optimizer_boolean_rank(
+                preferences.get(
+                    "prefer_dtsx"
+                ),
+                optimizer_is_dtsx(
+                    candidate
+                )
+            ),
+
+            optimizer_boolean_rank(
+                preferences.get(
+                    "prefer_lossless_audio"
+                ),
+                optimizer_is_lossless_audio(
+                    candidate
+                )
+            ),
+
+            optimizer_boolean_rank(
+                preferences.get(
+                    "prefer_eac3"
+                ),
+                optimizer_is_eac3(
+                    candidate
+                )
+            ),
+
+            optimizer_boolean_rank(
+                preferences.get(
+                    "prefer_proper_repack"
+                ),
+                optimizer_is_proper_repack(
+                    candidate
+                )
+            ),
+
+            optimizer_boolean_rank(
+                preferences.get(
+                    "prefer_freeleech"
+                ),
+                optimizer_is_freeleech(
+                    candidate
+                )
+            ),
+
+            (
+                int(
+                    candidate.get(
+                        "size_bytes"
+                    )
+                    or 0
+                )
+                if preferences.get(
+                    "prefer_smaller"
+                )
+                else 0
+            ),
+
+            optimizer_codec_rank(
+                candidate,
+                preferences
+            ),
+
+            (
+                -int(
+                    candidate.get(
+                        "seeders"
+                    )
+                    or 0
+                )
+                if preferences.get(
+                    "prefer_seeders"
+                )
+                else 0
+            ),
+
+            str(
+                candidate.get(
+                    "title"
+                )
+                or ""
+            ).casefold(),
+        )
+
+
+    pool.sort(
+        key=rank
+    )
+
 
     return pool[0]
+
 
 
 def describe_item(number, item):
@@ -1825,6 +3739,15 @@ def main():
     else:
         print("MODE: DRY RUN -- NO RELEASES WILL BE GRABBED")
 
+    active_rules = sync_radarr_target_rules(state)
+
+    if not radarr_has_target_rule(active_rules):
+        print("Selectable target rules: none")
+        print("Nothing will be searched.")
+        return
+
+    # SMART RADARR TARGET RULE SYNC MAIN
+
     print("Daily interactive-search budget:", DAILY_SEARCH_BUDGET + DAILY_EXTRA_BUDGET, "(base %d + today override %d)" % (DAILY_SEARCH_BUDGET, DAILY_EXTRA_BUDGET))
     print("Allowed saving window: %.1f%% to %.1f%%" % (MIN_SAVING_PERCENT, MAX_SAVING_PERCENT))
     print()
@@ -1897,6 +3820,15 @@ def main():
 
     while searches < remaining and (TARGET_GRABS <= 0 or grabs < TARGET_GRABS):
 
+        active_rules = sync_radarr_target_rules(state)
+
+        if not radarr_has_target_rule(active_rules):
+            print(
+                "RULE CHANGE: no Radarr target rules enabled.",
+                flush=True
+            )
+            break
+
         if TARGET_MOVIE_ID:
             if targeted_done:
                 break
@@ -1951,6 +3883,13 @@ def main():
             if item is None:
                 print(
                     "TARGETED RETRY: movie is not optimizer-eligible.",
+                    flush=True
+                )
+                break
+
+            if not radarr_item_enabled_by_rules(item):
+                print(
+                    "TARGETED RETRY: no enabled rule targets this movie.",
                     flush=True
                 )
                 break

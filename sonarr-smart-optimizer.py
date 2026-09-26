@@ -77,6 +77,1396 @@ def load_runtime_controls():
 MIN_SAVING_PERCENT, MAX_SAVING_PERCENT, DAILY_EXTRA_BUDGET = load_runtime_controls()
 
 
+# SMART SELECTABLE SONARR RULES START
+
+SONARR_RULE_KEYS = (
+    "storage_optimization",
+    "upgrade_720_to_1080",
+    "uhd_upgrade",
+    "require_hdr_uhd",
+    "prefer_dynamic_range",
+    "prefer_atmos",
+    "prefer_torrentleech",
+    "prefer_x265",
+    "block_av1",
+)
+
+# SMART RUNTIME RULES LKG V1 START
+
+_LAST_GOOD_RULES = None
+
+
+def runtime_rules():
+
+    global _LAST_GOOD_RULES
+
+    try:
+
+        with open(
+            CONTROL_FILE,
+            "r",
+            encoding="utf-8",
+        ) as f:
+
+            data = (
+                json.load(f)
+                or {}
+            )
+
+
+        raw = (
+            (
+                data.get(
+                    "sonarr",
+                    {}
+                )
+                or {}
+            ).get(
+                "rules"
+            )
+            or {}
+        )
+
+
+        if not isinstance(
+            raw,
+            dict
+        ):
+            raise ValueError(
+                "rules is not an object"
+            )
+
+
+        rules = {
+            key: bool(
+                raw.get(
+                    key,
+                    False
+                )
+            )
+            for key
+            in SONARR_RULE_KEYS
+        }
+
+
+        _LAST_GOOD_RULES = dict(
+            rules
+        )
+
+        return rules
+
+
+    except Exception:
+
+        if (
+            _LAST_GOOD_RULES
+            is not None
+        ):
+
+            return dict(
+                _LAST_GOOD_RULES
+            )
+
+
+        # Fresh install / first unreadable read:
+        # optional rules safely default OFF.
+        return {
+            key: False
+            for key
+            in SONARR_RULE_KEYS
+        }
+
+
+# SMART RUNTIME RULES LKG V1 END
+
+
+# SMART SONARR ADVANCED PREFERENCES V2 START
+
+SONARR_ADVANCED_BOOL_KEYS = (
+    "prefer_remux",
+    "prefer_bluray",
+    "prefer_webdl",
+    "prefer_webrip",
+    "prefer_hdtv",
+    "prefer_hdr10plus",
+    "prefer_10bit",
+    "prefer_dtsx",
+    "prefer_lossless_audio",
+    "prefer_eac3",
+    "prefer_proper_repack",
+    "prefer_freeleech",
+    "prefer_smaller",
+    "prefer_seeders",
+)
+
+SONARR_ADVANCED_CODEC_VALUES = (
+    "none",
+    "x265",
+    "x264",
+    "av1",
+)
+
+_LAST_GOOD_SONARR_ADVANCED = None
+
+
+def runtime_advanced_preferences():
+
+    global _LAST_GOOD_SONARR_ADVANCED
+
+    defaults = {
+        key: False
+        for key
+        in SONARR_ADVANCED_BOOL_KEYS
+    }
+
+    defaults["codec_preference"] = "none"
+    defaults["indexer_priority"] = []
+
+    try:
+
+        with open(
+            CONTROL_FILE,
+            "r",
+            encoding="utf-8",
+        ) as f:
+
+            data = (
+                json.load(f)
+                or {}
+            )
+
+        raw = (
+            (
+                data.get(
+                    "sonarr",
+                    {}
+                )
+                or {}
+            ).get(
+                "advanced_preferences",
+                {}
+            )
+            or {}
+        )
+
+        if not isinstance(
+            raw,
+            dict
+        ):
+            raise ValueError(
+                "advanced_preferences is not an object"
+            )
+
+        result = dict(
+            defaults
+        )
+
+        for key in (
+            SONARR_ADVANCED_BOOL_KEYS
+        ):
+
+            result[key] = bool(
+                raw.get(
+                    key,
+                    defaults[key]
+                )
+            )
+
+        codec = str(
+            raw.get(
+                "codec_preference",
+                "none"
+            )
+            or "none"
+        ).lower()
+
+        if codec not in (
+            SONARR_ADVANCED_CODEC_VALUES
+        ):
+            codec = "none"
+
+        result[
+            "codec_preference"
+        ] = codec
+
+        names = (
+            raw.get(
+                "indexer_priority"
+            )
+            or []
+        )
+
+        if not isinstance(
+            names,
+            list
+        ):
+            names = []
+
+        cleaned = []
+
+        for name in names:
+
+            value = str(
+                name
+                or ""
+            ).strip()
+
+            if (
+                value
+                and value not in cleaned
+            ):
+
+                cleaned.append(
+                    value[:200]
+                )
+
+            if len(cleaned) >= 100:
+                break
+
+        result[
+            "indexer_priority"
+        ] = cleaned
+
+        _LAST_GOOD_SONARR_ADVANCED = {
+            **result,
+
+            "indexer_priority":
+                list(
+                    result[
+                        "indexer_priority"
+                    ]
+                ),
+        }
+
+        return result
+
+    except Exception:
+
+        if (
+            _LAST_GOOD_SONARR_ADVANCED
+            is not None
+        ):
+
+            return {
+                **_LAST_GOOD_SONARR_ADVANCED,
+
+                "indexer_priority":
+                    list(
+                        _LAST_GOOD_SONARR_ADVANCED[
+                            "indexer_priority"
+                        ]
+                    ),
+            }
+
+        return defaults
+
+
+def sonarr_v2_choice_title(
+    choice
+):
+
+    direct = str(
+        choice.get(
+            "title"
+        )
+        or ""
+    ).strip()
+
+    if direct:
+        return direct
+
+    release = (
+        choice.get(
+            "release"
+        )
+        or {}
+    )
+
+    return str(
+        release.get(
+            "title"
+        )
+        or ""
+    ).strip()
+
+
+def sonarr_v2_choice_indexer(
+    choice
+):
+
+    direct = str(
+        choice.get(
+            "indexer"
+        )
+        or ""
+    ).strip()
+
+    if direct:
+        return direct
+
+    release = (
+        choice.get(
+            "release"
+        )
+        or {}
+    )
+
+    return str(
+        release.get(
+            "indexer"
+        )
+        or ""
+    ).strip()
+
+
+def sonarr_v2_choice_seeders(
+    choice
+):
+
+    release = (
+        choice.get(
+            "release"
+        )
+        or {}
+    )
+
+    value = (
+        choice.get(
+            "seeders"
+        )
+    )
+
+    if value is None:
+
+        value = release.get(
+            "seeders"
+        )
+
+    try:
+
+        return int(
+            value
+            or 0
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return 0
+
+
+def sonarr_v2_normalize_indexer(
+    value
+):
+
+    value = str(
+        value
+        or ""
+    ).strip().casefold()
+
+    if value.endswith(
+        "(prowlarr)"
+    ):
+
+        value = value[
+            :-len("(prowlarr)")
+        ].strip()
+
+    return "".join(
+        char
+        for char in value
+        if char.isalnum()
+    )
+
+
+def sonarr_v2_indexer_rank(
+    choice,
+    preferences,
+):
+
+    wanted = []
+
+    for name in (
+        preferences.get(
+            "indexer_priority"
+        )
+        or []
+    ):
+
+        normalized = (
+            sonarr_v2_normalize_indexer(
+                name
+            )
+        )
+
+        if (
+            normalized
+            and normalized not in wanted
+        ):
+
+            wanted.append(
+                normalized
+            )
+
+    if not wanted:
+        return 0
+
+    actual = (
+        sonarr_v2_normalize_indexer(
+            sonarr_v2_choice_indexer(
+                choice
+            )
+        )
+    )
+
+    for position, name in enumerate(
+        wanted
+    ):
+
+        if actual == name:
+            return position
+
+    return len(
+        wanted
+    )
+
+
+def sonarr_v2_source_type(
+    choice
+):
+
+    title = (
+        sonarr_v2_choice_title(
+            choice
+        ).upper()
+    )
+
+    if "REMUX" in title:
+        return "remux"
+
+    if any(
+        token in title
+        for token in (
+            "BLURAY",
+            "BLU-RAY",
+            "BDRIP",
+            "BD-RIP",
+        )
+    ):
+        return "bluray"
+
+    if any(
+        token in title
+        for token in (
+            "WEB-DL",
+            "WEBDL",
+            "WEB.DL",
+        )
+    ):
+        return "webdl"
+
+    if any(
+        token in title
+        for token in (
+            "WEBRIP",
+            "WEB-RIP",
+            "WEB.RIP",
+        )
+    ):
+        return "webrip"
+
+    if "HDTV" in title:
+        return "hdtv"
+
+    return "other"
+
+
+def sonarr_v2_source_rank(
+    choice,
+    preferences,
+):
+
+    source = (
+        sonarr_v2_source_type(
+            choice
+        )
+    )
+
+    enabled = []
+
+    for key, name in (
+        (
+            "prefer_remux",
+            "remux"
+        ),
+        (
+            "prefer_bluray",
+            "bluray"
+        ),
+        (
+            "prefer_webdl",
+            "webdl"
+        ),
+        (
+            "prefer_webrip",
+            "webrip"
+        ),
+        (
+            "prefer_hdtv",
+            "hdtv"
+        ),
+    ):
+
+        if preferences.get(key):
+
+            enabled.append(
+                name
+            )
+
+    if not enabled:
+        return 0
+
+    try:
+
+        return enabled.index(
+            source
+        )
+
+    except ValueError:
+
+        return len(
+            enabled
+        )
+
+
+def sonarr_v2_title_has(
+    choice,
+    tokens,
+):
+
+    title = (
+        sonarr_v2_choice_title(
+            choice
+        ).upper()
+    )
+
+    return any(
+        token in title
+        for token in tokens
+    )
+
+
+def sonarr_v2_is_hdr10plus(
+    choice
+):
+
+    return sonarr_v2_title_has(
+        choice,
+        (
+            "HDR10+",
+            "HDR10PLUS",
+            "HDR10 PLUS",
+        )
+    )
+
+
+def sonarr_v2_is_10bit(
+    choice
+):
+
+    return sonarr_v2_title_has(
+        choice,
+        (
+            "10BIT",
+            "10-BIT",
+            "10.BIT",
+        )
+    )
+
+
+def sonarr_v2_is_dtsx(
+    choice
+):
+
+    return sonarr_v2_title_has(
+        choice,
+        (
+            "DTS:X",
+            "DTS-X",
+            "DTS.X",
+        )
+    )
+
+
+def sonarr_v2_is_lossless_audio(
+    choice
+):
+
+    return sonarr_v2_title_has(
+        choice,
+        (
+            "TRUEHD",
+            "TRUE-HD",
+            "DTS-HD MA",
+            "DTS.HD.MA",
+            "DTSHDMA",
+        )
+    )
+
+
+def sonarr_v2_is_eac3(
+    choice
+):
+
+    return sonarr_v2_title_has(
+        choice,
+        (
+            "EAC3",
+            "E-AC-3",
+            "E.AC3",
+            "DD+",
+            "DDP",
+        )
+    )
+
+
+def sonarr_v2_is_proper_repack(
+    choice
+):
+
+    return sonarr_v2_title_has(
+        choice,
+        (
+            "PROPER",
+            "REPACK",
+        )
+    )
+
+
+def sonarr_v2_is_freeleech(
+    choice
+):
+
+    release = (
+        choice.get(
+            "release"
+        )
+        or {}
+    )
+
+    value = release.get(
+        "downloadVolumeFactor"
+    )
+
+    if value is None:
+        return False
+
+    try:
+
+        return float(
+            value
+        ) == 0.0
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return False
+
+
+def sonarr_v2_codec_rank(
+    choice,
+    preferences,
+):
+
+    wanted = str(
+        preferences.get(
+            "codec_preference",
+            "none"
+        )
+        or "none"
+    ).lower()
+
+    if wanted == "none":
+        return 0
+
+    actual = str(
+        choice.get(
+            "codec"
+        )
+        or ""
+    ).lower()
+
+    aliases = {
+        "hevc": "x265",
+        "h265": "x265",
+        "h.265": "x265",
+        "avc": "x264",
+        "h264": "x264",
+        "h.264": "x264",
+    }
+
+    actual = aliases.get(
+        actual,
+        actual
+    )
+
+    return (
+        0
+        if actual == wanted
+        else 1
+    )
+
+
+def sonarr_v2_boolean_rank(
+    enabled,
+    matches,
+):
+
+    if not enabled:
+        return 0
+
+    return (
+        0
+        if matches
+        else 1
+    )
+
+
+# SMART SONARR ADVANCED PREFERENCES V2 END
+
+
+
+def sonarr_policy_upgrade_targets(
+    item,
+    policy=None,
+):
+    policy = (
+        policy
+        or runtime_resolution_policy()
+    )
+
+    paths = policy["paths"]
+
+    resolution = int(
+        item.get("resolution")
+        or 0
+    )
+
+    profile_id = int(
+        item.get("profile_id")
+        or 0
+    )
+
+    targets = []
+
+
+    if (
+        resolution == 720
+        and paths.get("720_to_1080")
+    ):
+        targets.append(1080)
+
+
+    # Keep 2160p upgrades on the UHD profile.
+    if (
+        resolution == 720
+        and profile_id == UHD_PROFILE_ID
+        and paths.get("720_to_2160")
+    ):
+        targets.append(2160)
+
+
+    if (
+        resolution == 1080
+        and profile_id == UHD_PROFILE_ID
+        and paths.get("1080_to_2160")
+    ):
+        targets.append(2160)
+
+
+    return tuple(
+        sorted(
+            set(targets)
+        )
+    )
+
+
+def sonarr_min_current_mib(
+    policy=None,
+):
+    policy = (
+        policy
+        or runtime_resolution_policy()
+    )
+
+    setting = (
+        policy["limits"]
+        ["minimum_current_size"]
+    )
+
+    if not setting.get("enabled"):
+        return None
+
+    return policy_size_mib(
+        setting
+    )
+
+
+def sonarr_has_target_rule(rules=None):
+    rules = (
+        rules
+        or runtime_rules()
+    )
+
+    policy = runtime_resolution_policy()
+    paths = policy["paths"]
+
+    return bool(
+        rules.get(
+            "storage_optimization"
+        )
+        or paths.get(
+            "720_to_1080"
+        )
+        or paths.get(
+            "720_to_2160"
+        )
+        or paths.get(
+            "1080_to_2160"
+        )
+    )
+
+
+def sonarr_item_enabled_by_rules(item):
+    rules = runtime_rules()
+    policy = runtime_resolution_policy()
+
+    resolution = int(
+        item.get("resolution")
+        or 0
+    )
+
+    if resolution not in (
+        720,
+        1080,
+        2160,
+    ):
+        return False
+
+
+    upgrade_targets = (
+        sonarr_policy_upgrade_targets(
+            item,
+            policy
+        )
+    )
+
+
+    if (
+        resolution in (
+            1080,
+            2160,
+        )
+        and rules.get(
+            "storage_optimization"
+        )
+    ):
+        return True
+
+
+    # 720p is only considered through an enabled upgrade path.
+    return bool(
+        upgrade_targets
+    )
+
+
+# SMART SONARR FLEXIBLE ELIGIBILITY V1
+
+
+def sonarr_target_rule_signature(rules=None):
+    rules = (
+        rules
+        or runtime_rules()
+    )
+
+    policy = runtime_resolution_policy()
+    paths = policy["paths"]
+
+    minimum = (
+        policy["limits"]
+        ["minimum_current_size"]
+    )
+
+    minimum_mib = (
+        policy_size_mib(minimum)
+        if minimum.get("enabled")
+        else 0.0
+    )
+
+    return (
+        "storage=%d|"
+        "720_1080=%d|"
+        "720_2160=%d|"
+        "1080_2160=%d|"
+        "min_enabled=%d|"
+        "min_mib=%.3f"
+        % (
+            int(
+                bool(
+                    rules.get(
+                        "storage_optimization"
+                    )
+                )
+            ),
+
+            int(
+                bool(
+                    paths.get(
+                        "720_to_1080"
+                    )
+                )
+            ),
+
+            int(
+                bool(
+                    paths.get(
+                        "720_to_2160"
+                    )
+                )
+            ),
+
+            int(
+                bool(
+                    paths.get(
+                        "1080_to_2160"
+                    )
+                )
+            ),
+
+            int(
+                bool(
+                    minimum.get(
+                        "enabled"
+                    )
+                )
+            ),
+
+            minimum_mib,
+        )
+    )
+
+
+def sync_sonarr_target_rules(state):
+    rules = runtime_rules()
+    signature = sonarr_target_rule_signature(rules)
+    previous = state.get("target_rules_signature")
+
+    if previous is None:
+        state["target_rules_signature"] = signature
+
+        if LIVE:
+            save_state(state)
+
+    elif previous != signature:
+        state["target_rules_signature"] = signature
+        state["series_cursor"] = 0
+        state["work_queue"] = []
+        state["work_cursor"] = 0
+        state["rule_skipped_series_ids"] = []
+
+        if LIVE:
+            save_state(state)
+
+        print(
+            "RULE CHANGE: Sonarr A-Z queue reset.",
+            flush=True
+        )
+
+    return rules
+
+
+# SMART SONARR TARGET RULE SYNC
+
+# SMART SELECTABLE SONARR RULES END
+
+# SMART SONARR RESOLUTION POLICY START
+
+_LAST_GOOD_RESOLUTION_POLICY = None
+
+
+def runtime_resolution_policy():
+    global _LAST_GOOD_RESOLUTION_POLICY
+
+
+    def clean_size_limit(
+        raw,
+        default_value,
+        default_unit,
+    ):
+        raw = (
+            raw
+            if isinstance(raw, dict)
+            else {}
+        )
+
+        try:
+            value = float(
+                raw.get(
+                    "value",
+                    default_value
+                )
+            )
+
+            if value < 0:
+                raise ValueError
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+            value = float(
+                default_value
+            )
+
+        unit = str(
+            raw.get(
+                "unit",
+                default_unit
+            )
+        ).strip()
+
+        if unit not in (
+            "MiB",
+            "GiB",
+        ):
+            unit = default_unit
+
+        return {
+            "enabled": bool(
+                raw.get(
+                    "enabled",
+                    False
+                )
+            ),
+
+            "value": value,
+
+            "unit": unit,
+        }
+
+
+    def clean_growth_range(
+        raw,
+        default_min,
+        default_max,
+    ):
+        raw = (
+            raw
+            if isinstance(raw, dict)
+            else {}
+        )
+
+        try:
+            minimum = float(
+                raw.get(
+                    "min_percent",
+                    default_min
+                )
+            )
+
+            maximum = float(
+                raw.get(
+                    "max_percent",
+                    default_max
+                )
+            )
+
+            if (
+                minimum < 0
+                or maximum < 0
+                or minimum > maximum
+            ):
+                raise ValueError
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+            minimum = float(
+                default_min
+            )
+
+            maximum = float(
+                default_max
+            )
+
+        return {
+            "enabled": bool(
+                raw.get(
+                    "enabled",
+                    False
+                )
+            ),
+
+            "min_percent": minimum,
+
+            "max_percent": maximum,
+        }
+
+
+    try:
+
+        with open(
+            CONTROL_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            data = json.load(f) or {}
+
+
+        raw = (
+            (data.get("sonarr", {}) or {})
+            .get(
+                "resolution_policy",
+                {}
+            )
+            or {}
+        )
+
+
+        raw_paths = (
+            raw.get("paths")
+            or {}
+        )
+
+        raw_limits = (
+            raw.get("limits")
+            or {}
+        )
+
+        raw_growth = (
+            raw.get("upgrade_growth")
+            or {}
+        )
+
+
+        policy = {
+
+            "paths": {
+
+                "720_to_1080": bool(
+                    raw_paths.get(
+                        "720_to_1080",
+                        False
+                    )
+                ),
+
+                "720_to_2160": bool(
+                    raw_paths.get(
+                        "720_to_2160",
+                        False
+                    )
+                ),
+
+                "1080_to_2160": bool(
+                    raw_paths.get(
+                        "1080_to_2160",
+                        False
+                    )
+                ),
+            },
+
+
+            "limits": {
+
+                "minimum_current_size":
+                    clean_size_limit(
+                        raw_limits.get(
+                            "minimum_current_size"
+                        ),
+                        0,
+                        "MiB",
+                    ),
+
+                "maximum_1080_size":
+                    clean_size_limit(
+                        raw_limits.get(
+                            "maximum_1080_size"
+                        ),
+                        10,
+                        "GiB",
+                    ),
+
+                "maximum_2160_size":
+                    clean_size_limit(
+                        raw_limits.get(
+                            "maximum_2160_size"
+                        ),
+                        20,
+                        "GiB",
+                    ),
+            },
+
+
+            "upgrade_growth": {
+
+                "720_to_1080":
+                    clean_growth_range(
+                        raw_growth.get(
+                            "720_to_1080"
+                        ),
+                        0,
+                        40,
+                    ),
+
+                "720_to_2160":
+                    clean_growth_range(
+                        raw_growth.get(
+                            "720_to_2160"
+                        ),
+                        0,
+                        100,
+                    ),
+
+                "1080_to_2160":
+                    clean_growth_range(
+                        raw_growth.get(
+                            "1080_to_2160"
+                        ),
+                        0,
+                        0,
+                    ),
+            },
+        }
+
+
+        _LAST_GOOD_RESOLUTION_POLICY = policy
+
+        return policy
+
+
+    except Exception:
+
+        if (
+            _LAST_GOOD_RESOLUTION_POLICY
+            is not None
+        ):
+            return (
+                _LAST_GOOD_RESOLUTION_POLICY
+            )
+
+
+        return {
+
+            "paths": {
+                "720_to_1080": False,
+                "720_to_2160": False,
+                "1080_to_2160": False,
+            },
+
+            "limits": {
+
+                "minimum_current_size": {
+                    "enabled": False,
+                    "value": 0.0,
+                    "unit": "MiB",
+                },
+
+                "maximum_1080_size": {
+                    "enabled": False,
+                    "value": 10.0,
+                    "unit": "GiB",
+                },
+
+                "maximum_2160_size": {
+                    "enabled": False,
+                    "value": 20.0,
+                    "unit": "GiB",
+                },
+            },
+
+            "upgrade_growth": {
+
+                "720_to_1080": {
+                    "enabled": False,
+                    "min_percent": 0.0,
+                    "max_percent": 40.0,
+                },
+
+                "720_to_2160": {
+                    "enabled": False,
+                    "min_percent": 0.0,
+                    "max_percent": 100.0,
+                },
+
+                "1080_to_2160": {
+                    "enabled": False,
+                    "min_percent": 0.0,
+                    "max_percent": 0.0,
+                },
+            },
+        }
+
+
+def policy_size_mib(setting):
+
+    value = float(
+        setting.get(
+            "value",
+            0
+        )
+        or 0
+    )
+
+    if (
+        setting.get("unit")
+        == "GiB"
+    ):
+        return (
+            value
+            * 1024.0
+        )
+
+    return value
+
+
+def upgrade_growth_percent(
+    old_size_mib,
+    new_size_mib,
+):
+
+    old_size_mib = float(
+        old_size_mib
+    )
+
+    new_size_mib = float(
+        new_size_mib
+    )
+
+    if old_size_mib <= 0:
+        return None
+
+    return (
+        (
+            new_size_mib
+            - old_size_mib
+        )
+        / old_size_mib
+        * 100.0
+    )
+
+
+# SMART SONARR RESOLUTION POLICY END
+
+
+
+
+
 # Don't deliberately grab the exact same release again for this long
 ATTEMPT_COOLDOWN_DAYS = 365
 
@@ -531,7 +1921,20 @@ def reconcile_auto_processed_series(state):
 
     processed = auto_processed_series_ids(state)
     before = set(processed)
-    processed.update(loaded - unconsumed)
+
+    rule_skipped = {
+        int(x)
+        for x in state.get(
+            "rule_skipped_series_ids",
+            []
+        )
+        if str(x).isdigit()
+    }
+
+    processed.update(
+        (loaded - unconsumed)
+        - rule_skipped
+    )
     state["auto_processed_series_ids"] = sorted(processed)
 
     if LIVE and processed != before:
@@ -1179,17 +2582,59 @@ def item_from_queue_entry(entry, queued_ids, state, ignore_search_history=False)
     except Exception as e:
         print("    SKIP file metadata error:", e, flush=True)
         return None
-    # Episodes already below 400 MiB are small enough that spending an
-    # interactive search/download on further optimization is not worthwhile.
-    current_size_mib = mib(file_obj.get("size", 0))
-    if current_size_mib < 400:
+    policy = runtime_resolution_policy()
+
+    current_size_mib = mib(
+        file_obj.get(
+            "size",
+            0
+        )
+    )
+
+    minimum_mib = sonarr_min_current_mib(
+        policy
+    )
+
+    if (
+        minimum_mib is not None
+        and current_size_mib < minimum_mib
+    ):
         return None
 
-    resolution = file_resolution(file_obj)
-    if not resolution:
+
+    resolution = file_resolution(
+        file_obj
+    )
+
+    if resolution not in (
+        720,
+        1080,
+        2160,
+    ):
         return None
-    media = file_obj.get("mediaInfo") or {}
-    target = 2160 if profile_id == UHD_PROFILE_ID else 1080
+
+
+    upgrade_targets = (
+        sonarr_policy_upgrade_targets(
+            {
+                "resolution": resolution,
+                "profile_id": profile_id,
+            },
+            policy
+        )
+    )
+
+
+    target = (
+        max(upgrade_targets)
+        if upgrade_targets
+        else resolution
+    )
+
+
+    media = file_obj.get(
+        "mediaInfo"
+    ) or {}
     return {
         "series_id": int(series["id"]),
         "series_title": series.get("title", entry.get("series_title", "")),
@@ -1236,12 +2681,20 @@ def targeted_episode_item(episode_id, queued_ids, state):
         "episode": int(ep.get("episodeNumber", 0)),
     }
 
-    return item_from_queue_entry(
+    item = item_from_queue_entry(
         entry,
         queued_ids,
         state,
         ignore_search_history=MANUAL_TARGET_MODE
     )
+
+    if (
+        item is not None
+        and not sonarr_item_enabled_by_rules(item)
+    ):
+        return None
+
+    return item
 
 
 def targeted_series_items(series_id, queued_ids, state):
@@ -1289,7 +2742,10 @@ def targeted_series_items(series_id, queued_ids, state):
                 ignore_search_history=MANUAL_TARGET_MODE
             )
 
-            if item is not None:
+            if (
+                item is not None
+                and sonarr_item_enabled_by_rules(item)
+            ):
                 items.append(item)
 
         except Exception as exc:
@@ -1343,6 +2799,37 @@ def next_work_items(state, queued_ids, limit):
             save_state(state)
 
         item = item_from_queue_entry(entry, queued_ids, state)
+
+        if (
+            item is not None
+            and not sonarr_item_enabled_by_rules(item)
+        ):
+            series_id = int(
+                item.get("series_id")
+                or 0
+            )
+
+            skipped = {
+                int(x)
+                for x in state.get(
+                    "rule_skipped_series_ids",
+                    []
+                )
+                if str(x).isdigit()
+            }
+
+            if series_id > 0:
+                skipped.add(series_id)
+
+                state["rule_skipped_series_ids"] = sorted(
+                    skipped
+                )
+
+                if LIVE:
+                    save_state(state)
+
+            continue
+
         if item is not None:
             # Exclusion applies to the ENTIRE Sonarr series.
             # Skip every episode before any interactive /release search.
@@ -1527,6 +3014,83 @@ def optimizer_release_is_pack(release):
 
 
 
+
+
+def sonarr_upgrade_path_key(
+    old_resolution,
+    new_resolution,
+):
+    return {
+        (720, 1080): "720_to_1080",
+        (720, 2160): "720_to_2160",
+        (1080, 2160): "1080_to_2160",
+    }.get(
+        (
+            int(old_resolution),
+            int(new_resolution),
+        )
+    )
+
+
+def sonarr_candidate_max_mib(
+    resolution,
+    policy=None,
+):
+    policy = (
+        policy
+        or runtime_resolution_policy()
+    )
+
+    key = {
+        1080: "maximum_1080_size",
+        2160: "maximum_2160_size",
+    }.get(
+        int(resolution)
+    )
+
+    if not key:
+        return None
+
+    setting = (
+        policy["limits"]
+        [key]
+    )
+
+    if not setting.get("enabled"):
+        return None
+
+    return policy_size_mib(
+        setting
+    )
+
+
+def sonarr_upgrade_growth_range(
+    old_resolution,
+    new_resolution,
+    policy=None,
+):
+    policy = (
+        policy
+        or runtime_resolution_policy()
+    )
+
+    key = sonarr_upgrade_path_key(
+        old_resolution,
+        new_resolution,
+    )
+
+    if not key:
+        return None
+
+    return (
+        policy["upgrade_growth"]
+        .get(key)
+    )
+
+
+# SMART SONARR FLEXIBLE CANDIDATE POLICY V1
+
+
 def evaluate_release(item, release, state):
     title = str(
         release.get("title")
@@ -1593,7 +3157,9 @@ def evaluate_release(item, release, state):
         return None
 
 
-    new_res = int(new_res)
+    new_res = int(
+        new_res
+    )
 
     old_res = int(
         item["resolution"]
@@ -1604,81 +3170,88 @@ def evaluate_release(item, release, state):
         or 0
     )
 
-
-    # --------------------------------------------------------
-    # SPECIAL 720p RULE
-    #
-    # 720 -> 1080 YES
-    # 720 -> 720  NO
-    # 720 -> 2160 NO
-    # --------------------------------------------------------
-
-    if old_res == 720:
-
-        if new_res != 1080:
-
-            print(
-                "    RESOLUTION RULE: "
-                "720p may ONLY become 1080p | REJECT",
-                flush=True
-            )
-
-            return None
+    rules = runtime_rules()
+    policy = runtime_resolution_policy()
 
 
-    # Other old sub-1080 resolutions are left alone.
-    elif old_res < 1080:
+    # Never downgrade resolution.
+    if new_res < old_res:
 
         print(
             "    RESOLUTION RULE: "
-            "sub-1080 source is not 720p | REJECT",
+            "%dp -> %dp downgrade | REJECT"
+            % (
+                old_res,
+                new_res,
+            ),
             flush=True
         )
 
         return None
 
 
-    # --------------------------------------------------------
-    # UHD PROFILE
-    #
-    # Current 1080 -> candidate 2160
-    # Current 2160 -> candidate 2160
-    # --------------------------------------------------------
+    # Same-resolution storage optimization.
+    if new_res == old_res:
 
-    elif profile_id == UHD_PROFILE_ID:
-
-        if new_res != 2160:
+        # 720p is handled only through an explicit upgrade path.
+        if old_res == 720:
 
             print(
                 "    RESOLUTION RULE: "
-                "UHD profile requires 2160p | REJECT",
+                "720p same-resolution optimization disabled | REJECT",
                 flush=True
             )
 
             return None
 
 
-    # --------------------------------------------------------
-    # NORMAL PROFILE
-    #
-    # 1080 stays 1080.
-    # --------------------------------------------------------
-
-    else:
-
-        if new_res != old_res:
+        if not rules.get(
+            "storage_optimization"
+        ):
 
             print(
                 "    RESOLUTION RULE: "
-                "%dp must remain %dp | REJECT"
+                "same-resolution storage optimization disabled | REJECT",
+                flush=True
+            )
+
+            return None
+
+
+    # Resolution upgrade.
+    else:
+
+        allowed_targets = (
+            sonarr_policy_upgrade_targets(
+                item,
+                policy
+            )
+        )
+
+        if new_res not in allowed_targets:
+
+            print(
+                "    RESOLUTION RULE: "
+                "%dp -> %dp path disabled | REJECT"
                 % (
                     old_res,
-                    old_res,
+                    new_res,
                 ),
                 flush=True
             )
 
             return None
+
+
+        print(
+            "    RESOLUTION RULE: "
+            "%dp -> %dp path enabled | PASS"
+            % (
+                old_res,
+                new_res,
+            ),
+            flush=True
+        )
 
 
     # ========================================================
@@ -1691,7 +3264,10 @@ def evaluate_release(item, release, state):
 
 
     # NO AV1 for series.
-    if codec == "av1":
+    if (
+        codec == "av1"
+        and rules.get("block_av1")
+    ):
 
         print(
             "    CODEC RULE: AV1 | REJECT",
@@ -1750,7 +3326,8 @@ def evaluate_release(item, release, state):
     # UHD:
     # require at least HDR.
     if (
-        profile_id == UHD_PROFILE_ID
+        rules.get("require_hdr_uhd")
+        and profile_id == UHD_PROFILE_ID
         and new_res == 2160
         and dynamic_range
         not in (
@@ -1794,107 +3371,57 @@ def evaluate_release(item, release, state):
 
 
     EPS = 0.000001
+    PERCENT_EPSILON = 0.000001
 
 
-    # ========================================================
-    # THE ONLY UPSIZE EXCEPTION:
+    # --------------------------------------------------------
+    # Optional absolute ceiling by TARGET resolution.
     #
-    #         720p -> 1080p
+    # Example:
+    #   max 1080p = 8 GiB
+    #   max 2160p = 20 GiB
     #
-    # Up to +40%.
-    #
-    # No minimum saving requirement here because this is a
-    # quality upgrade rather than a same-resolution downsize.
-    # ========================================================
+    # OFF means no absolute target-size ceiling.
+    # --------------------------------------------------------
+
+    maximum_mib = sonarr_candidate_max_mib(
+        new_res,
+        policy
+    )
 
     if (
-        old_res == 720
-        and new_res == 1080
+        maximum_mib is not None
+        and new_size
+        > maximum_mib + EPS
     ):
 
-        maximum = (
-            old_size
-            * 1.40
-        )
-
-
-        if new_size > maximum + EPS:
-
-            growth = (
-                (
-                    new_size
-                    - old_size
-                )
-                / old_size
-                * 100.0
-            )
-
-            print(
-                "    720->1080 SIZE RULE: "
-                "%.2f%% growth > 40%% | REJECT"
-                % growth,
-                flush=True
-            )
-
-            return None
-
-
-        saving = (
-            (
-                old_size
-                - new_size
-            )
-            / old_size
-            * 100.0
-        )
-
-
         print(
-            "    720->1080 SIZE RULE: "
-            "%.1f -> %.1f MiB; "
-            "maximum %.1f MiB | PASS"
+            "    TARGET SIZE CEILING: "
+            "%.1f MiB > %.1f MiB for %dp | REJECT"
             % (
-                old_size,
                 new_size,
-                maximum,
+                maximum_mib,
+                new_res,
             ),
             flush=True
         )
 
-
-        reason = (
-            "720p to 1080p upgrade"
-        )
+        return None
 
 
-    else:
+    is_upgrade = (
+        new_res > old_res
+    )
 
-        # ====================================================
-        # EVERYTHING ELSE MUST SHRINK.
-        #
-        # 1080 -> 1080
-        # 1080 -> 2160
-        # 2160 -> 2160
-        #
-        # Same size = NO.
-        # Bigger     = NO.
-        # ====================================================
 
-        if new_size >= old_size - EPS:
+    # --------------------------------------------------------
+    # Candidate is SMALLER.
+    #
+    # Downsize rules apply regardless of whether this is
+    # same-resolution or a resolution upgrade.
+    # --------------------------------------------------------
 
-            print(
-                "    ABSOLUTE SIZE RULE: "
-                "%.1f MiB is not smaller than "
-                "%.1f MiB | REJECT"
-                % (
-                    new_size,
-                    old_size,
-                ),
-                flush=True
-            )
-
-            return None
-
+    if new_size < old_size - EPS:
 
         saving = (
             (
@@ -1906,15 +3433,14 @@ def evaluate_release(item, release, state):
         )
 
 
-        # User-configured minimum remains respected.
         if (
             saving
             < MIN_SAVING_PERCENT
-            - EPS
+            - PERCENT_EPSILON
         ):
 
             print(
-                "    SIZE RULE: "
+                "    DOWNSIZE RULE: "
                 "%.2f%% saving below %.1f%% | REJECT"
                 % (
                     saving,
@@ -1926,26 +3452,22 @@ def evaluate_release(item, release, state):
             return None
 
 
-        # HARD SAFETY CEILING:
-        #
-        # Even if the UI/config is accidentally set above 40,
-        # Sonarr Smart Optimizer will never downsize more than 40%.
-        effective_max_saving = min(
-            float(MAX_SAVING_PERCENT),
-            40.0
+        # Use the configured RULES maximum directly.
+        effective_max_saving = float(
+            MAX_SAVING_PERCENT
         )
 
 
         if (
             saving
             > effective_max_saving
-            + EPS
+            + PERCENT_EPSILON
         ):
 
             print(
-                "    SIZE RULE: "
-                "%.2f%% saving above hard/effective "
-                "%.1f%% maximum | REJECT"
+                "    DOWNSIZE RULE: "
+                "%.2f%% saving above %.1f%% "
+                "configured maximum | REJECT"
                 % (
                     saving,
                     effective_max_saving,
@@ -1957,15 +3479,158 @@ def evaluate_release(item, release, state):
 
 
         print(
-            "    SIZE RULE: "
-            "%.2f%% saving | PASS"
-            % saving,
+            "    DOWNSIZE RULE: "
+            "%.2f%% saving | allowed %.1f%%-%.1f%% | PASS"
+            % (
+                saving,
+                MIN_SAVING_PERCENT,
+                effective_max_saving,
+            ),
             flush=True
         )
 
 
         reason = (
-            "strictly smaller replacement"
+            "%dp to %dp downsize"
+            % (
+                old_res,
+                new_res,
+            )
+            if is_upgrade
+            else "strictly smaller replacement"
+        )
+
+
+    # --------------------------------------------------------
+    # Equal or LARGER.
+    #
+    # Only an enabled resolution upgrade can do this.
+    # Its own Growth range decides the limit.
+    # --------------------------------------------------------
+
+    else:
+
+        saving = (
+            (
+                old_size
+                - new_size
+            )
+            / old_size
+            * 100.0
+        )
+
+
+        if not is_upgrade:
+
+            print(
+                "    SIZE RULE: "
+                "same-resolution replacement is not smaller | REJECT",
+                flush=True
+            )
+
+            return None
+
+
+        growth_setting = (
+            sonarr_upgrade_growth_range(
+                old_res,
+                new_res,
+                policy
+            )
+        )
+
+
+        if (
+            not growth_setting
+            or not growth_setting.get(
+                "enabled"
+            )
+        ):
+
+            print(
+                "    UPGRADE GROWTH: "
+                "growth disabled for %dp -> %dp | REJECT"
+                % (
+                    old_res,
+                    new_res,
+                ),
+                flush=True
+            )
+
+            return None
+
+
+        growth = max(
+            0.0,
+            upgrade_growth_percent(
+                old_size,
+                new_size,
+            )
+        )
+
+
+        minimum_growth = float(
+            growth_setting.get(
+                "min_percent",
+                0.0
+            )
+        )
+
+        maximum_growth = float(
+            growth_setting.get(
+                "max_percent",
+                0.0
+            )
+        )
+
+
+        if (
+            growth
+            < minimum_growth
+            - PERCENT_EPSILON
+            or growth
+            > maximum_growth
+            + PERCENT_EPSILON
+        ):
+
+            print(
+                "    UPGRADE GROWTH: "
+                "%dp -> %dp | %.2f%% "
+                "outside %.1f%%-%.1f%% | REJECT"
+                % (
+                    old_res,
+                    new_res,
+                    growth,
+                    minimum_growth,
+                    maximum_growth,
+                ),
+                flush=True
+            )
+
+            return None
+
+
+        print(
+            "    UPGRADE GROWTH: "
+            "%dp -> %dp | %.2f%% "
+            "allowed %.1f%%-%.1f%% | PASS"
+            % (
+                old_res,
+                new_res,
+                growth,
+                minimum_growth,
+                maximum_growth,
+            ),
+            flush=True
+        )
+
+
+        reason = (
+            "%dp to %dp upgrade"
+            % (
+                old_res,
+                new_res,
+            )
         )
 
 
@@ -2011,48 +3676,23 @@ def choose_best(item, releases, state):
     if not valid:
         return None
 
+    rules = runtime_rules()
 
-    # ========================================================
-    # TORRENTLEECH FIRST
-    # ========================================================
+    # SMART SONARR RANKING V2A
     #
-    # This DOES NOT create another Sonarr search.
+    # All releases that passed evaluate_release() remain
+    # eligible. Preferred indexers are now an ORDERED ranking
+    # preference instead of a hard TorrentLeech-only pool.
     #
-    # We use the SAME /release result set.
-    #
-    # If at least one VALID TorrentLeech release exists,
-    # every other indexer is ignored.
+    # Nonpreferred indexers remain valid fallbacks.
 
-    torrentleech = [
-        candidate
-        for candidate in valid
-        if candidate.get(
-            "torrentleech"
-        )
-    ]
+    preferences = (
+        runtime_advanced_preferences()
+    )
 
-
-    if torrentleech:
-
-        pool = torrentleech
-
-        print(
-            "    INDEXER POLICY: "
-            "TorrentLeech valid pool found",
-            flush=True
-        )
-
-
-    else:
-
-        pool = valid
-
-        print(
-            "    INDEXER POLICY: "
-            "no valid TorrentLeech; "
-            "using fallback indexers",
-            flush=True
-        )
+    pool = list(
+        valid
+    )
 
 
     old_res = int(
@@ -2065,32 +3705,83 @@ def choose_best(item, releases, state):
     )
 
 
-    # Defensive resolution filter.
-    if old_res == 720:
+    # Defensive resolution filter using the live policy.
+
+    policy = runtime_resolution_policy()
+    rules = runtime_rules()
+
+    allowed_targets = (
+        sonarr_policy_upgrade_targets(
+            item,
+            policy
+        )
+    )
+
+
+    higher = [
+        candidate
+        for candidate in pool
+        if (
+            int(
+                candidate.get(
+                    "resolution",
+                    0
+                )
+            )
+            > old_res
+            and int(
+                candidate.get(
+                    "resolution",
+                    0
+                )
+            )
+            in allowed_targets
+        )
+    ]
+
+
+    if higher:
+
+        highest_resolution = max(
+            int(
+                candidate["resolution"]
+            )
+            for candidate in higher
+        )
 
         pool = [
-            x
-            for x in pool
-            if x["resolution"] == 1080
+            candidate
+            for candidate in higher
+            if int(
+                candidate["resolution"]
+            )
+            == highest_resolution
         ]
 
 
-    elif profile_id == UHD_PROFILE_ID:
+    elif (
+        old_res in (
+            1080,
+            2160,
+        )
+        and rules.get(
+            "storage_optimization"
+        )
+    ):
 
         pool = [
-            x
-            for x in pool
-            if x["resolution"] == 2160
+            candidate
+            for candidate in pool
+            if int(
+                candidate["resolution"]
+            )
+            == old_res
         ]
 
 
     else:
 
-        pool = [
-            x
-            for x in pool
-            if x["resolution"] == old_res
-        ]
+        pool = []
 
 
     if not pool:
@@ -2121,24 +3812,154 @@ def choose_best(item, releases, state):
         }
 
 
+        # SMART SONARR RANKING V2B
+        #
+        # UHD ranking:
+        #   1. Preferred indexer order
+        #   2. Enabled source preference
+        #   3. Dynamic range
+        #   4. Atmos
+        #   5. Advanced quality preferences
+        #   6. Smaller file
+        #   7. Codec preference
+        #   8. Seeders
+        #   9. Title
+
         pool.sort(
             key=lambda x: (
-                -dr_rank.get(
-                    x.get(
-                        "dynamic_range",
-                        "SDR_UNKNOWN"
-                    ),
-                    0
+
+                sonarr_v2_indexer_rank(
+                    x,
+                    preferences
                 ),
-                -int(
-                    bool(
-                        x.get("atmos")
+
+                sonarr_v2_source_rank(
+                    x,
+                    preferences
+                ),
+
+                (
+                    -dr_rank.get(
+                        x.get(
+                            "dynamic_range",
+                            "SDR_UNKNOWN"
+                        ),
+                        0
+                    )
+                    if rules.get(
+                        "prefer_dynamic_range"
+                    )
+                    else 0
+                ),
+
+                (
+                    -int(
+                        bool(
+                            x.get(
+                                "atmos"
+                            )
+                        )
+                    )
+                    if rules.get(
+                        "prefer_atmos"
+                    )
+                    else 0
+                ),
+
+                sonarr_v2_boolean_rank(
+                    preferences.get(
+                        "prefer_hdr10plus"
+                    ),
+                    sonarr_v2_is_hdr10plus(
+                        x
                     )
                 ),
-                x["size_mib"],
-                0
-                if x["codec"] == "x265"
-                else 1,
+
+                sonarr_v2_boolean_rank(
+                    preferences.get(
+                        "prefer_10bit"
+                    ),
+                    sonarr_v2_is_10bit(
+                        x
+                    )
+                ),
+
+                sonarr_v2_boolean_rank(
+                    preferences.get(
+                        "prefer_dtsx"
+                    ),
+                    sonarr_v2_is_dtsx(
+                        x
+                    )
+                ),
+
+                sonarr_v2_boolean_rank(
+                    preferences.get(
+                        "prefer_lossless_audio"
+                    ),
+                    sonarr_v2_is_lossless_audio(
+                        x
+                    )
+                ),
+
+                sonarr_v2_boolean_rank(
+                    preferences.get(
+                        "prefer_eac3"
+                    ),
+                    sonarr_v2_is_eac3(
+                        x
+                    )
+                ),
+
+                sonarr_v2_boolean_rank(
+                    preferences.get(
+                        "prefer_proper_repack"
+                    ),
+                    sonarr_v2_is_proper_repack(
+                        x
+                    )
+                ),
+
+                sonarr_v2_boolean_rank(
+                    preferences.get(
+                        "prefer_freeleech"
+                    ),
+                    sonarr_v2_is_freeleech(
+                        x
+                    )
+                ),
+
+                (
+                    float(
+                        x.get(
+                            "size_mib"
+                        )
+                        or 0
+                    )
+                    if preferences.get(
+                        "prefer_smaller"
+                    )
+                    else 0
+                ),
+
+                sonarr_v2_codec_rank(
+                    x,
+                    preferences
+                ),
+
+                (
+                    -sonarr_v2_choice_seeders(
+                        x
+                    )
+                    if preferences.get(
+                        "prefer_seeders"
+                    )
+                    else 0
+                ),
+
+                sonarr_v2_choice_title(
+                    x
+                ).casefold(),
             )
         )
 
@@ -2154,12 +3975,118 @@ def choose_best(item, releases, state):
 
     else:
 
+        # SMART SONARR NORMAL RANKING V2B
+        #
+        # Normal 720/1080 ranking deliberately does NOT add
+        # HDR/Atmos priority. Those remain UHD-specific here.
+
         pool.sort(
             key=lambda x: (
-                x["size_mib"],
-                0
-                if x["codec"] == "x265"
-                else 1,
+
+                sonarr_v2_indexer_rank(
+                    x,
+                    preferences
+                ),
+
+                sonarr_v2_source_rank(
+                    x,
+                    preferences
+                ),
+
+                sonarr_v2_boolean_rank(
+                    preferences.get(
+                        "prefer_hdr10plus"
+                    ),
+                    sonarr_v2_is_hdr10plus(
+                        x
+                    )
+                ),
+
+                sonarr_v2_boolean_rank(
+                    preferences.get(
+                        "prefer_10bit"
+                    ),
+                    sonarr_v2_is_10bit(
+                        x
+                    )
+                ),
+
+                sonarr_v2_boolean_rank(
+                    preferences.get(
+                        "prefer_dtsx"
+                    ),
+                    sonarr_v2_is_dtsx(
+                        x
+                    )
+                ),
+
+                sonarr_v2_boolean_rank(
+                    preferences.get(
+                        "prefer_lossless_audio"
+                    ),
+                    sonarr_v2_is_lossless_audio(
+                        x
+                    )
+                ),
+
+                sonarr_v2_boolean_rank(
+                    preferences.get(
+                        "prefer_eac3"
+                    ),
+                    sonarr_v2_is_eac3(
+                        x
+                    )
+                ),
+
+                sonarr_v2_boolean_rank(
+                    preferences.get(
+                        "prefer_proper_repack"
+                    ),
+                    sonarr_v2_is_proper_repack(
+                        x
+                    )
+                ),
+
+                sonarr_v2_boolean_rank(
+                    preferences.get(
+                        "prefer_freeleech"
+                    ),
+                    sonarr_v2_is_freeleech(
+                        x
+                    )
+                ),
+
+                (
+                    float(
+                        x.get(
+                            "size_mib"
+                        )
+                        or 0
+                    )
+                    if preferences.get(
+                        "prefer_smaller"
+                    )
+                    else 0
+                ),
+
+                sonarr_v2_codec_rank(
+                    x,
+                    preferences
+                ),
+
+                (
+                    -sonarr_v2_choice_seeders(
+                        x
+                    )
+                    if preferences.get(
+                        "prefer_seeders"
+                    )
+                    else 0
+                ),
+
+                sonarr_v2_choice_title(
+                    x
+                ).casefold(),
             )
         )
 
@@ -2266,6 +4193,15 @@ def main():
     else:
         print("MODE: DRY RUN -- NO RELEASES WILL BE GRABBED")
 
+    active_rules = sync_sonarr_target_rules(state)
+
+    # SMART SONARR TARGET RULE SYNC MAIN
+
+    if not sonarr_has_target_rule(active_rules):
+        print("Selectable target rules: none")
+        print("Nothing will be searched.")
+        return
+
     print("Daily interactive-search budget:", DAILY_SEARCH_BUDGET + DAILY_EXTRA_BUDGET, "(base %d + today override %d)" % (DAILY_SEARCH_BUDGET, DAILY_EXTRA_BUDGET))
     print("Same-resolution saving window: %.1f%% to %.1f%%" % (MIN_SAVING_PERCENT, MAX_SAVING_PERCENT))
     print("Resolution rule: ONLY 720p->1080p may grow up to +40%; all 1080p/2160p replacements must shrink")
@@ -2363,6 +4299,15 @@ def main():
     # not satisfy that target, but every /release lookup still consumes the
     # normal daily/per-run search budget.
     while searches < target_searches and (TARGET_GRABS <= 0 or grabs < TARGET_GRABS):
+        active_rules = sync_sonarr_target_rules(state)
+
+        if not sonarr_has_target_rule(active_rules):
+            print(
+                "RULE CHANGE: no Sonarr target rules enabled.",
+                flush=True
+            )
+            break
+
         if not MANUAL_TARGET_MODE:
             actual_left = max(
                 0,
@@ -2392,7 +4337,15 @@ def main():
             if number >= len(targeted_series):
                 break
 
-            selected = [targeted_series[number]]
+            targeted_item = targeted_series[number]
+
+            if not sonarr_item_enabled_by_rules(
+                targeted_item
+            ):
+                number += 1
+                continue
+
+            selected = [targeted_item]
 
         else:
             selected = next_work_items(
@@ -2405,7 +4358,7 @@ def main():
             if TARGET_EPISODE_ID > 0:
                 print(
                     "TARGETED EPISODE SKIPPED: unavailable, queued, "
-                    "below 400 MiB, or otherwise ineligible.",
+                    "below the configured minimum current size, or otherwise ineligible.",
                     flush=True
                 )
             break

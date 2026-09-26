@@ -1045,6 +1045,83 @@ body{
 
 }
 
+
+
+.rules-main-button:hover{
+    transform:translateY(-1px);
+}
+
+.radarr-rules-button:hover{
+    background:#ff7048 !important;
+    border-color:#ff7048 !important;
+    color:#fff !important;
+    box-shadow:
+        0 0 18px
+        rgba(255,112,72,.52);
+}
+
+.sonarr-rules-button:hover{
+    background:#28c5ff !important;
+    border-color:#28c5ff !important;
+    color:#041019 !important;
+    box-shadow:
+        0 0 18px
+        rgba(40,197,255,.52);
+}
+
+
+/* SMART RULES STRONG HOVER GLOW */
+
+.rules-main-button {
+    display: inline-block !important;
+    position: relative !important;
+    transition:
+        transform .16s ease,
+        box-shadow .16s ease,
+        filter .16s ease,
+        background .16s ease,
+        border-color .16s ease,
+        color .16s ease !important;
+}
+
+.radarr-rules-button:hover,
+.radarr-rules-button:focus-visible {
+    color: #fff !important;
+    background: rgba(255, 45, 45, .24) !important;
+    border-color: #ff3b30 !important;
+
+    box-shadow:
+        0 0 6px rgba(255, 59, 48, 1),
+        0 0 14px rgba(255, 59, 48, .95),
+        0 0 28px rgba(255, 59, 48, .72),
+        inset 0 0 12px rgba(255, 59, 48, .20) !important;
+
+    filter:
+        drop-shadow(0 0 5px rgba(255, 59, 48, 1))
+        drop-shadow(0 0 12px rgba(255, 59, 48, .85)) !important;
+
+    transform: translateY(-2px) scale(1.055) !important;
+}
+
+.sonarr-rules-button:hover,
+.sonarr-rules-button:focus-visible {
+    color: #fff !important;
+    background: rgba(0, 174, 255, .24) !important;
+    border-color: #20c7ff !important;
+
+    box-shadow:
+        0 0 6px rgba(32, 199, 255, 1),
+        0 0 14px rgba(32, 199, 255, .95),
+        0 0 28px rgba(32, 199, 255, .72),
+        inset 0 0 12px rgba(32, 199, 255, .20) !important;
+
+    filter:
+        drop-shadow(0 0 5px rgba(32, 199, 255, 1))
+        drop-shadow(0 0 12px rgba(32, 199, 255, .85)) !important;
+
+    transform: translateY(-2px) scale(1.055) !important;
+}
+
 </style>
 
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico">
@@ -2292,7 +2369,7 @@ def app_controls(app):
     data = load_controls()
     c = data.get(app, {})
     today = time.strftime("%Y-%m-%d")
-    return float(c.get("min_saving_percent", 5.0)), float(c.get("max_saving_percent", 50.0)), int((c.get("daily_extra") or {}).get(today, 0))
+    return float(c.get("min_saving_percent", 0.0)), float(c.get("max_saving_percent", 0.0)), int((c.get("daily_extra") or {}).get(today, 0))
 
 def update_saving_window(app, minimum, maximum):
     if not (0 <= minimum <= maximum <= 100):
@@ -2309,6 +2386,4430 @@ def add_daily_extra(app, amount=50):
     c["daily_extra"] = {today: extras[today]}
     save_controls(data)
     return extras[today]
+
+
+
+# SMART RULES UI BACKEND START
+
+RULE_DEFINITIONS = {
+    "radarr": (
+        (
+            "Targets",
+            (
+                (
+                    "storage_optimization",
+                    "Storage optimization",
+                    "Allow same-resolution replacements that reduce file size."
+                ),
+                (
+                    "uhd_upgrade",
+                    "UHD upgrade",
+                    "Allow UHD-profile movies to upgrade from 1080p to 2160p."
+                ),
+            ),
+        ),
+        (
+            "Preferences & compatibility",
+            (
+                (
+                    "prefer_dynamic_range",
+                    "Prefer DV / HDR",
+                    "Rank DV+HDR above HDR, and HDR above SDR, among releases that already pass safety checks."
+                ),
+                (
+                    "prefer_atmos",
+                    "Prefer Atmos",
+                    "Prefer an Atmos release when the candidate is otherwise safe."
+                ),
+                (
+                    "prefer_audio_channels",
+                    "Prefer more audio channels",
+                    "Prefer the candidate with the higher audio channel count."
+                ),
+                (
+                    "prefer_torrentleech",
+                    "Prefer TorrentLeech",
+                    "Prefer a valid TorrentLeech candidate over valid fallback indexers."
+                ),
+                (
+                    "prefer_x265",
+                    "Prefer x265 / HEVC",
+                    "Use x265 / HEVC as a ranking preference after the higher-priority rules."
+                ),
+                (
+                    "block_av1",
+                    "Block AV1",
+                    "Reject AV1 replacement releases."
+                ),
+            ),
+        ),
+    ),
+
+    "sonarr": (
+        (
+            "Targets",
+            (
+                (
+                    "storage_optimization",
+                    "Storage optimization",
+                    "Allow same-resolution episode replacements that reduce file size."
+                ),
+                (
+                    "upgrade_720_to_1080",
+                    "Upgrade 720p to 1080p",
+                    "Allow the special 720p to 1080p upgrade path."
+                ),
+                (
+                    "uhd_upgrade",
+                    "UHD 1080p to 2160p",
+                    "Allow UHD-profile episodes currently at 1080p to upgrade to 2160p."
+                ),
+            ),
+        ),
+        (
+            "Preferences & compatibility",
+            (
+                (
+                    "require_hdr_uhd",
+                    "Require HDR for UHD",
+                    "Require 2160p UHD candidates to advertise HDR or DV+HDR."
+                ),
+                (
+                    "prefer_dynamic_range",
+                    "Prefer DV / HDR",
+                    "For UHD candidates, prefer DV+HDR over HDR and HDR over SDR."
+                ),
+                (
+                    "prefer_atmos",
+                    "Prefer Atmos",
+                    "For UHD candidates, prefer Atmos when higher-priority rules are equal."
+                ),
+                (
+                    "prefer_torrentleech",
+                    "Prefer TorrentLeech",
+                    "Use the valid TorrentLeech pool first when one exists."
+                ),
+                (
+                    "prefer_x265",
+                    "Prefer x265 / HEVC",
+                    "Use x265 / HEVC as a ranking preference without overriding the size policy."
+                ),
+                (
+                    "block_av1",
+                    "Block AV1",
+                    "Reject AV1 replacement releases."
+                ),
+            ),
+        ),
+    ),
+}
+
+
+def selectable_rule_keys(app):
+    if app not in RULE_DEFINITIONS:
+        raise ValueError("Unknown optimizer")
+
+    keys = []
+
+    for _section, rules in RULE_DEFINITIONS[app]:
+        for key, _label, _description in rules:
+            keys.append(key)
+
+    return tuple(keys)
+
+
+def selectable_rules(app):
+    if app not in RULE_DEFINITIONS:
+        raise ValueError("Unknown optimizer")
+
+    data = load_controls()
+    raw = (
+        (data.get(app, {}) or {}).get("rules")
+        or {}
+    )
+
+    # Intentionally OFF when no saved value exists.
+    # This is the fresh-install default.
+    return {
+        key: bool(raw.get(key, False))
+        for key in selectable_rule_keys(app)
+    }
+
+
+def update_selectable_rule(app, key, enabled):
+    if app not in RULE_DEFINITIONS:
+        raise ValueError("Unknown optimizer")
+
+    if key not in selectable_rule_keys(app):
+        raise ValueError("Unknown rule")
+
+    data = load_controls()
+    config = data.setdefault(app, {})
+    rules = config.setdefault("rules", {})
+
+    rules[key] = bool(enabled)
+    config["rules_version"] = 1
+
+    save_controls(data)
+
+
+def rules_summary(app):
+    rules = selectable_rules(app)
+
+    return (
+        sum(1 for enabled in rules.values() if enabled),
+        len(rules),
+    )
+
+
+
+
+# SMART RESOLUTION POLICY UI BACKEND START
+
+RESOLUTION_PATH_KEYS = (
+    "720_to_1080",
+    "720_to_2160",
+    "1080_to_2160",
+)
+
+RESOLUTION_LIMIT_KEYS = (
+    "minimum_current_size",
+    "maximum_1080_size",
+    "maximum_2160_size",
+)
+
+
+def resolution_policy_defaults(app):
+    if app == "radarr":
+        minimum = {
+            "enabled": False,
+            "value": 5.0,
+            "unit": "GiB",
+        }
+    elif app == "sonarr":
+        minimum = {
+            "enabled": False,
+            "value": 400.0,
+            "unit": "MiB",
+        }
+    else:
+        raise ValueError("Unknown app")
+
+    return {
+        "paths": {
+            "720_to_1080": False,
+            "720_to_2160": False,
+            "1080_to_2160": False,
+        },
+
+        "limits": {
+            "minimum_current_size": minimum,
+
+            "maximum_1080_size": {
+                "enabled": False,
+                "value": 10.0,
+                "unit": "GiB",
+            },
+
+            "maximum_2160_size": {
+                "enabled": False,
+                "value": 20.0,
+                "unit": "GiB",
+            },
+        },
+
+        "upgrade_growth": {
+            "720_to_1080": {
+                "enabled": False,
+                "min_percent": 0.0,
+                "max_percent": 40.0,
+            },
+
+            "720_to_2160": {
+                "enabled": False,
+                "min_percent": 0.0,
+                "max_percent": 100.0,
+            },
+
+            "1080_to_2160": {
+                "enabled": False,
+                "min_percent": 0.0,
+                "max_percent": 0.0,
+            },
+        },
+    }
+
+
+def resolution_policy_settings(app):
+    defaults = resolution_policy_defaults(app)
+
+    data = load_controls()
+    config = data.get(app, {}) or {}
+    raw = config.get("resolution_policy", {}) or {}
+
+    raw_paths = raw.get("paths", {}) or {}
+    raw_limits = raw.get("limits", {}) or {}
+    raw_growth = raw.get("upgrade_growth", {}) or {}
+
+    out = resolution_policy_defaults(app)
+
+    for key in RESOLUTION_PATH_KEYS:
+        out["paths"][key] = bool(
+            raw_paths.get(
+                key,
+                defaults["paths"][key]
+            )
+        )
+
+    for key in RESOLUTION_LIMIT_KEYS:
+        source = raw_limits.get(key, {}) or {}
+        default = defaults["limits"][key]
+
+        try:
+            value = float(
+                source.get(
+                    "value",
+                    default["value"]
+                )
+            )
+        except (TypeError, ValueError):
+            value = float(default["value"])
+
+        unit = str(
+            source.get(
+                "unit",
+                default["unit"]
+            )
+        )
+
+        if unit not in ("MiB", "GiB"):
+            unit = default["unit"]
+
+        out["limits"][key] = {
+            "enabled": bool(
+                source.get(
+                    "enabled",
+                    default["enabled"]
+                )
+            ),
+            "value": value,
+            "unit": unit,
+        }
+
+    for key in RESOLUTION_PATH_KEYS:
+        source = raw_growth.get(key, {}) or {}
+        default = defaults["upgrade_growth"][key]
+
+        try:
+            minimum = float(
+                source.get(
+                    "min_percent",
+                    default["min_percent"]
+                )
+            )
+            maximum = float(
+                source.get(
+                    "max_percent",
+                    default["max_percent"]
+                )
+            )
+        except (TypeError, ValueError):
+            minimum = default["min_percent"]
+            maximum = default["max_percent"]
+
+        out["upgrade_growth"][key] = {
+            "enabled": bool(
+                source.get(
+                    "enabled",
+                    default["enabled"]
+                )
+            ),
+            "min_percent": minimum,
+            "max_percent": maximum,
+        }
+
+    return out
+
+
+def update_resolution_path(app, key, enabled):
+    if app not in ("radarr", "sonarr"):
+        raise ValueError("Unknown app")
+
+    if key not in RESOLUTION_PATH_KEYS:
+        raise ValueError("Unknown resolution path")
+
+    data = load_controls()
+    config = data.setdefault(app, {})
+    policy = config.setdefault("resolution_policy", {})
+
+    paths = policy.setdefault("paths", {})
+    growth = policy.setdefault("upgrade_growth", {})
+
+    enabled = bool(enabled)
+
+    paths[key] = enabled
+
+    entry = growth.setdefault(key, {})
+    entry["enabled"] = enabled
+
+    save_controls(data)
+
+
+def update_resolution_limit(
+    app,
+    key,
+    enabled,
+    value,
+    unit,
+):
+    if app not in ("radarr", "sonarr"):
+        raise ValueError("Unknown app")
+
+    if key not in RESOLUTION_LIMIT_KEYS:
+        raise ValueError("Unknown size limit")
+
+    value = float(value)
+
+    if value <= 0 or value > 1000000:
+        raise ValueError(
+            "Size value must be greater than 0."
+        )
+
+    if unit not in ("MiB", "GiB"):
+        raise ValueError(
+            "Unit must be MiB or GiB."
+        )
+
+    data = load_controls()
+    config = data.setdefault(app, {})
+    policy = config.setdefault("resolution_policy", {})
+    limits = policy.setdefault("limits", {})
+
+    limits[key] = {
+        "enabled": bool(enabled),
+        "value": value,
+        "unit": unit,
+    }
+
+    save_controls(data)
+
+
+def update_upgrade_growth(
+    app,
+    key,
+    minimum,
+    maximum,
+):
+    if app not in ("radarr", "sonarr"):
+        raise ValueError("Unknown app")
+
+    if key not in RESOLUTION_PATH_KEYS:
+        raise ValueError("Unknown upgrade path")
+
+    minimum = float(minimum)
+    maximum = float(maximum)
+
+    if not (
+        0 <= minimum <= maximum <= 10000
+    ):
+        raise ValueError(
+            "Growth must be 0-10000%, "
+            "with minimum <= maximum."
+        )
+
+    data = load_controls()
+    config = data.setdefault(app, {})
+    policy = config.setdefault("resolution_policy", {})
+    growth = policy.setdefault("upgrade_growth", {})
+
+    paths = policy.setdefault("paths", {})
+
+    entry = growth.setdefault(key, {})
+    entry["min_percent"] = minimum
+    entry["max_percent"] = maximum
+
+    # Growth follows the path toggle.
+    entry["enabled"] = bool(
+        paths.get(key, False)
+    )
+
+    save_controls(data)
+
+
+
+
+# SMART ADVANCED PREFERENCES V2 UI BACKEND START
+
+ADVANCED_BOOL_KEYS = (
+    "prefer_remux",
+    "prefer_bluray",
+    "prefer_webdl",
+    "prefer_webrip",
+    "prefer_hdtv",
+    "prefer_hdr10plus",
+    "prefer_10bit",
+    "prefer_dtsx",
+    "prefer_lossless_audio",
+    "prefer_eac3",
+    "prefer_proper_repack",
+    "prefer_freeleech",
+    "prefer_smaller",
+    "prefer_seeders",
+)
+
+ADVANCED_CODEC_VALUES = (
+    "none",
+    "x265",
+    "x264",
+    "av1",
+)
+
+
+def advanced_preferences(app):
+
+    if app not in (
+        "radarr",
+        "sonarr",
+    ):
+        raise ValueError(
+            "Unknown optimizer"
+        )
+
+    defaults = {
+        key: False
+        for key in ADVANCED_BOOL_KEYS
+    }
+
+    defaults["codec_preference"] = "none"
+    defaults["indexer_priority"] = []
+
+    data = load_controls()
+
+    raw = (
+        (
+            data.get(app, {})
+            or {}
+        ).get(
+            "advanced_preferences",
+            {}
+        )
+        or {}
+    )
+
+    result = dict(defaults)
+
+    for key in ADVANCED_BOOL_KEYS:
+        result[key] = bool(
+            raw.get(
+                key,
+                defaults[key]
+            )
+        )
+
+    codec = str(
+        raw.get(
+            "codec_preference",
+            "none"
+        )
+        or "none"
+    ).lower()
+
+    if codec not in ADVANCED_CODEC_VALUES:
+        codec = "none"
+
+    result["codec_preference"] = codec
+
+    names = (
+        raw.get(
+            "indexer_priority"
+        )
+        or []
+    )
+
+    if not isinstance(
+        names,
+        list
+    ):
+        names = []
+
+    cleaned = []
+
+    for name in names:
+
+        value = str(
+            name
+            or ""
+        ).strip()
+
+        if (
+            value
+            and value not in cleaned
+        ):
+            cleaned.append(
+                value[:200]
+            )
+
+    result["indexer_priority"] = cleaned
+
+    return result
+
+
+def update_advanced_preferences(
+    app,
+    values,
+):
+
+    if not isinstance(
+        values,
+        dict
+    ):
+        raise ValueError(
+            "Invalid preference payload"
+        )
+
+    current = advanced_preferences(
+        app
+    )
+
+    for key in ADVANCED_BOOL_KEYS:
+
+        if key in values:
+            current[key] = bool(
+                values[key]
+            )
+
+    if "codec_preference" in values:
+
+        codec = str(
+            values.get(
+                "codec_preference"
+            )
+            or "none"
+        ).lower()
+
+        if codec not in ADVANCED_CODEC_VALUES:
+            raise ValueError(
+                "Unknown codec preference"
+            )
+
+        current["codec_preference"] = codec
+
+    if "indexer_priority" in values:
+
+        incoming = (
+            values.get(
+                "indexer_priority"
+            )
+            or []
+        )
+
+        if not isinstance(
+            incoming,
+            list
+        ):
+            raise ValueError(
+                "Indexer priority must be a list"
+            )
+
+        cleaned = []
+
+        for name in incoming:
+
+            value = str(
+                name
+                or ""
+            ).strip()
+
+            if (
+                value
+                and value not in cleaned
+            ):
+                cleaned.append(
+                    value[:200]
+                )
+
+        current[
+            "indexer_priority"
+        ] = cleaned
+
+    data = load_controls()
+
+    config = data.setdefault(
+        app,
+        {}
+    )
+
+    config[
+        "advanced_preferences"
+    ] = current
+
+    save_controls(
+        data
+    )
+
+
+def configured_indexers(app):
+
+    if app == "radarr":
+        getter = radarr_get
+
+    elif app == "sonarr":
+        getter = sonarr_get
+
+    else:
+        raise ValueError(
+            "Unknown optimizer"
+        )
+
+    try:
+
+        raw = (
+            getter(
+                "/indexer"
+            )
+            or []
+        )
+
+    except Exception as exc:
+
+        return (
+            [],
+            str(exc)
+        )
+
+    if isinstance(
+        raw,
+        dict
+    ):
+
+        raw = (
+            raw.get("records")
+            or raw.get("indexers")
+            or []
+        )
+
+    names = []
+
+    for item in raw:
+
+        if not isinstance(
+            item,
+            dict
+        ):
+            continue
+
+        name = str(
+            item.get("name")
+            or ""
+        ).strip()
+
+        if (
+            name
+            and name not in names
+        ):
+            names.append(name)
+
+    names.sort(
+        key=lambda value:
+            value.lower()
+    )
+
+    return (
+        names,
+        None
+    )
+
+
+# SMART ADVANCED PREFERENCES V2 UI BACKEND END
+
+
+# SMART RESOLUTION POLICY UI BACKEND END
+
+
+# SMART RULES UI BACKEND END
+
+
+# SMART RULES LOCKED DEFINITIONS START
+
+RULE_LOCKED = {
+
+    "radarr": (
+
+        (
+            "Existing file required",
+            "Only movies that already have a Radarr movie file can be optimized."
+        ),
+
+        (
+            "Active-download protection",
+            "A movie already represented in the download queue is skipped before searching."
+        ),
+
+        (
+            "Automatic one-shot search",
+            "Each movie receives at most one automatic optimizer release search. Explicit Manual Optimizer retries may bypass that one-shot history."
+        ),
+
+        (
+            "Persistent A-Z queue",
+            "Automatic work follows the saved alphabetical movie queue. Newly downloaded movies are appended to the bottom."
+        ),
+
+        (
+            "Optimizer exclusions",
+            "Movies on the Smart Optimizer exclusion list are skipped before any interactive release search."
+        ),
+
+        (
+            "Unambiguous movie-folder guard",
+            "The movie folder must contain exactly one registered root movie file and exactly one physical root video with the same filename."
+        ),
+
+        (
+            "Minimum current movie size",
+            "Current movie files below 5 GiB are not automatic optimization targets."
+        ),
+
+        (
+            "Supported source resolutions",
+            "Radarr evaluates current 720p, 1080p or 2160p movie files; 720p participates only through an enabled upgrade path."
+        ),
+
+        (
+            "Dangerous-release protection",
+            "Releases matching dangerous or unsafe payload patterns are rejected."
+        ),
+
+        (
+            "Radarr rejection protection",
+            "Candidate releases rejected by Radarr's applicable safety checks are not selected."
+        ),
+
+        (
+            "Movie identity protection",
+            "A candidate must match the intended movie rather than merely looking attractive by size or quality."
+        ),
+
+        (
+            "Edition / cut protection",
+            "An existing Extended, Limited, Special, Director's Cut or protected edition cannot be silently replaced by an ordinary theatrical release."
+        ),
+
+        (
+            "Release-attempt cooldown",
+            "The same attempted release is not deliberately grabbed again during the optimizer cooldown period."
+        ),
+
+        (
+            "Seeder requirement",
+            "Seeder information must be usable and the release must satisfy the optimizer minimum-seeder requirement."
+        ),
+
+        (
+            "No resolution downgrade",
+            "A replacement may never lower the current movie resolution."
+        ),
+
+        (
+            "2160p upgrade profile guard",
+            "A 2160p movie upgrade requires the UHD profile and an enabled 2160p upgrade path."
+        ),
+
+        (
+            "Candidate size required",
+            "A replacement with missing, zero or invalid file size is rejected."
+        ),
+
+        (
+            "Same-resolution shrink protection",
+            "Same-resolution replacements must be smaller. Enabled resolution upgrades may grow only within their configured Growth range."
+        ),
+
+        (
+            "1080p replacement ceiling",
+            "A 1080p replacement may not exceed 10 GiB."
+        ),
+
+        (
+            "Configured saving window",
+            "Accepted downsizes must remain inside the configured minimum and maximum saving percentages."
+        ),
+
+        (
+            "Dolby Vision fallback protection",
+            "Dolby Vision-only releases without HDR fallback are rejected."
+        ),
+
+        (
+            "Existing HDR / DV protection",
+            "A replacement cannot discard protected dynamic-range capability already present in the current movie."
+        ),
+
+        (
+            "Existing Atmos protection",
+            "A replacement cannot discard Atmos already present in the current movie."
+        ),
+
+        (
+            "Existing audio-channel protection",
+            "A replacement cannot reduce the protected audio channel count of the current movie."
+        ),
+
+        (
+            "Final import / file validation",
+            "Optimizer replacement tracking and import handling remain guarded so the current media is not treated as safely replaced until the expected Arr workflow is verified."
+        ),
+
+        (
+            "Tracker cleanup protection",
+            "Torrent cleanup follows the selected indexer policy and verified-import state; unknown tracker state is not automatically deleted."
+        ),
+
+        (
+            "Daily search budget",
+            "Automatic optimizer work remains limited by the configured daily interactive-search allowance."
+        ),
+    ),
+
+
+    "sonarr": (
+
+        (
+            "Existing episode file required",
+            "Only episodes that already have a Sonarr episode file can be optimized."
+        ),
+
+        (
+            "Active-download protection",
+            "Episodes already represented in the Sonarr download queue are skipped before searching."
+        ),
+
+        (
+            "Automatic one-shot search",
+            "Each episode receives at most one automatic optimizer release search. Explicit Manual Optimizer retries may bypass that one-shot history."
+        ),
+
+        (
+            "Persistent A-Z series queue",
+            "Automatic work follows the saved alphabetical series queue and processes episode files from each series in order."
+        ),
+
+        (
+            "Series-wide optimizer exclusions",
+            "A Sonarr series on the Smart Optimizer exclusion list is skipped before interactive release searches."
+        ),
+
+        (
+            "Supported quality profiles",
+            "Automatic Sonarr optimization only targets the configured Normal and UHD optimizer quality profiles."
+        ),
+
+        (
+            "Minimum current episode size",
+            "Current episode files below 400 MiB are not automatic optimization targets."
+        ),
+
+        (
+            "Dangerous-release protection",
+            "Releases matching dangerous or unsafe payload patterns are rejected."
+        ),
+
+        (
+            "Sonarr rejection protection",
+            "Sonarr release rejections are respected except the specific existing-file cutoff/upgrade notices the optimizer intentionally evaluates beyond."
+        ),
+
+        (
+            "Single-episode protection",
+            "Season packs and multi-episode releases are rejected; Smart Optimizer compares one episode file with one replacement file."
+        ),
+
+        (
+            "Release-attempt cooldown",
+            "The same attempted release is not deliberately grabbed again during the optimizer cooldown period."
+        ),
+
+        (
+            "Seeder requirement",
+            "Seeder information must be usable and the release must satisfy the optimizer minimum-seeder requirement."
+        ),
+
+        (
+            "720p same-resolution protection",
+            "A current 720p episode is not replaced at 720p; it can move only through an enabled 720p upgrade path."
+        ),
+
+        (
+            "Other sub-1080 protection",
+            "Current resolutions below 1080p that are not 720p are left untouched."
+        ),
+
+        (
+            "2160p upgrade profile guard",
+            "A 2160p upgrade requires the UHD optimizer profile; normal-profile 720p episodes may still use an enabled 720p-to-1080p path."
+        ),
+
+        (
+            "UHD-profile resolution guard",
+            "UHD-profile replacement candidates must be 2160p."
+        ),
+
+        (
+            "Dolby Vision fallback protection",
+            "Dolby Vision-only releases without HDR fallback are rejected."
+        ),
+
+        (
+            "720p-to-1080p growth ceiling",
+            "The special 720p-to-1080p quality upgrade may grow by at most 40 percent."
+        ),
+
+        (
+            "Same-resolution shrink protection",
+            "Same-resolution replacements must be smaller. Enabled resolution upgrades may grow only within their configured Growth range."
+        ),
+
+        (
+            "Configured minimum saving",
+            "Ordinary downsizes must satisfy the configured minimum saving percentage."
+        ),
+
+        (
+            "Hard 40 percent downsize ceiling",
+            "Sonarr Smart Optimizer will never downsize an episode by more than 40 percent even if the configured maximum is higher."
+        ),
+
+        (
+            "Per-series search protection",
+            "One series cannot consume the whole automatic run; the optimizer enforces its per-series search limit."
+        ),
+
+        (
+            "Final import / file validation",
+            "Replacement tracking and import handling remain guarded until Sonarr's expected file workflow is verified."
+        ),
+
+        (
+            "Tracker cleanup protection",
+            "Torrent cleanup follows verified import state and tracker policy; unresolved tracker state is never blindly removed."
+        ),
+
+        (
+            "Daily search budget",
+            "Automatic optimizer work remains limited by the configured daily interactive-search allowance."
+        ),
+    ),
+}
+
+# SMART RULES LOCKED DEFINITIONS END
+
+
+
+
+# SMART FLEXIBLE RULES PAGE START
+
+
+def rules_page(app):
+
+    if app not in (
+        "radarr",
+        "sonarr",
+    ):
+        raise ValueError(
+            "Unknown optimizer"
+        )
+
+
+    title = (
+        "Radarr"
+        if app == "radarr"
+        else "Sonarr"
+    )
+
+    accent = (
+        "#ff7048"
+        if app == "radarr"
+        else "#28c5ff"
+    )
+
+    accent_rgb = (
+        "255,112,72"
+        if app == "radarr"
+        else "40,197,255"
+    )
+
+    background = (
+        "/radarr-background.png"
+        if app == "radarr"
+        else "/sonarr-background.png"
+    )
+
+    icon = (
+        "/radarr-icon.png"
+        if app == "radarr"
+        else "/sonarr-icon.png"
+    )
+
+    dashboard = (
+        "/radarr"
+        if app == "radarr"
+        else "/sonarr"
+    )
+
+
+    rules = selectable_rules(
+        app
+    )
+
+    policy = resolution_policy_settings(
+        app
+    )
+
+    # SMART RULES V2 PAGE DATA START
+
+    advanced = advanced_preferences(
+        app
+    )
+
+    available_indexers, indexer_error = (
+        configured_indexers(
+            app
+        )
+    )
+
+    # SMART RULES V2 PAGE DATA END
+
+    down_min, down_max, _extra = (
+        app_controls(app)
+    )
+
+
+    # These old target toggles have been replaced by the
+    # generalized resolution-path controls below.
+    obsolete_target_keys = {
+        "uhd_upgrade",
+        "upgrade_720_to_1080",
+
+        # Superseded by RULES V2 generalized controls.
+        "prefer_torrentleech",
+        "prefer_x265",
+    }
+
+
+    selectable_html = []
+
+
+    for section_name, entries in RULE_DEFINITIONS[app]:
+
+        cards = []
+
+        for key, label, description in entries:
+
+            if key in obsolete_target_keys:
+                continue
+
+            enabled = bool(
+                rules.get(
+                    key,
+                    False
+                )
+            )
+
+            cards.append(
+                """
+<div class="rule-card">
+  <div class="rule-copy">
+    <div class="rule-title">%s</div>
+    <div class="rule-description">%s</div>
+  </div>
+
+  <div class="rule-control">
+    <span class="state-pill">%s</span>
+
+    <label class="switch">
+      <input
+        class="rule-toggle"
+        type="checkbox"
+        data-rule="%s"
+        %s
+      >
+      <span class="slider"></span>
+    </label>
+  </div>
+</div>
+"""
+                % (
+                    html.escape(label),
+                    html.escape(description),
+                    "ON" if enabled else "OFF",
+                    html.escape(
+                        key,
+                        quote=True
+                    ),
+                    "checked"
+                    if enabled
+                    else "",
+                )
+            )
+
+
+        if cards:
+
+            selectable_html.append(
+                """
+<section class="rules-section">
+  <div class="section-heading">
+    <div>
+      <h2>%s</h2>
+      <p>Changes apply to the optimizer runtime policy.</p>
+    </div>
+  </div>
+
+  <div class="rule-list">
+    %s
+  </div>
+</section>
+"""
+                % (
+                    html.escape(
+                        section_name
+                    ),
+                    "".join(cards),
+                )
+            )
+
+
+    # ========================================================
+    # RESOLUTION PATHS
+    # ========================================================
+
+    path_labels = {
+        "720_to_1080":
+            (
+                "720p → 1080p",
+                "Allow an existing 720p file to upgrade to 1080p."
+            ),
+
+        "720_to_2160":
+            (
+                "720p → 2160p",
+                "Allow an existing 720p file to upgrade directly to 2160p on the UHD profile."
+            ),
+
+        "1080_to_2160":
+            (
+                "1080p → 2160p",
+                "Allow an existing 1080p file to upgrade to 2160p on the UHD profile."
+            ),
+    }
+
+
+    path_cards = []
+
+    for key in RESOLUTION_PATH_KEYS:
+
+        label, description = (
+            path_labels[key]
+        )
+
+        enabled = bool(
+            policy["paths"].get(
+                key,
+                False
+            )
+        )
+
+        growth = (
+            policy["upgrade_growth"]
+            [key]
+        )
+
+        path_cards.append(
+            """
+<div class="rule-card path-card">
+
+  <div class="rule-copy">
+
+    <div class="rule-title">%s</div>
+
+    <div class="rule-description">
+      %s
+    </div>
+
+    <div class="growth-controls">
+
+      <span class="growth-label">
+        Growth
+      </span>
+
+      <input
+        class="growth-value"
+        type="number"
+        min="0"
+        max="10000"
+        step="0.1"
+        data-growth-min="%s"
+        value="%.1f"
+        aria-label="Minimum growth percent"
+      >
+
+      <span class="growth-separator">
+        –
+      </span>
+
+      <input
+        class="growth-value"
+        type="number"
+        min="0"
+        max="10000"
+        step="0.1"
+        data-growth-max="%s"
+        value="%.1f"
+        aria-label="Maximum growth percent"
+      >
+
+      <span class="growth-percent">
+        %%
+      </span>
+
+      <button
+        class="growth-save"
+        type="button"
+        data-growth-save="%s"
+      >
+        Save growth
+      </button>
+
+    </div>
+
+  </div>
+
+
+  <div class="rule-control">
+
+    <span class="state-pill">
+      %s
+    </span>
+
+    <label class="switch">
+
+      <input
+        class="path-toggle"
+        type="checkbox"
+        data-path="%s"
+        %s
+      >
+
+      <span class="slider"></span>
+
+    </label>
+
+  </div>
+
+</div>
+"""
+            % (
+                html.escape(label),
+                html.escape(description),
+
+                html.escape(
+                    key,
+                    quote=True
+                ),
+
+                float(
+                    growth.get(
+                        "min_percent",
+                        0
+                    )
+                ),
+
+                html.escape(
+                    key,
+                    quote=True
+                ),
+
+                float(
+                    growth.get(
+                        "max_percent",
+                        0
+                    )
+                ),
+
+                html.escape(
+                    key,
+                    quote=True
+                ),
+
+                "ON"
+                if enabled
+                else "OFF",
+
+                html.escape(
+                    key,
+                    quote=True
+                ),
+
+                "checked"
+                if enabled
+                else "",
+            )
+        )
+
+
+
+    # ========================================================
+    # SIZE LIMITS
+    # ========================================================
+
+    limit_labels = {
+
+        "minimum_current_size":
+            (
+                "Minimum current file size",
+                "Skip optimization when the existing file is smaller than this value."
+            ),
+
+        "maximum_1080_size":
+            (
+                "Maximum 1080p replacement size",
+                "Optional absolute ceiling for any accepted 1080p replacement."
+            ),
+
+        "maximum_2160_size":
+            (
+                "Maximum 2160p / 4K replacement size",
+                "Optional absolute ceiling for any accepted 2160p replacement."
+            ),
+    }
+
+
+    limit_cards = []
+
+    for key in RESOLUTION_LIMIT_KEYS:
+
+        label, description = (
+            limit_labels[key]
+        )
+
+        setting = (
+            policy["limits"][key]
+        )
+
+        enabled = bool(
+            setting.get(
+                "enabled",
+                False
+            )
+        )
+
+        value = float(
+            setting.get(
+                "value",
+                0
+            )
+        )
+
+        unit = str(
+            setting.get(
+                "unit",
+                "MiB"
+            )
+        )
+
+
+        limit_cards.append(
+            """
+<div class="rule-card limit-card">
+
+  <div class="rule-copy">
+    <div class="rule-title">%s</div>
+    <div class="rule-description">%s</div>
+  </div>
+
+  <div class="limit-controls">
+
+    <label class="switch">
+      <input
+        class="limit-toggle"
+        type="checkbox"
+        data-limit="%s"
+        %s
+      >
+      <span class="slider"></span>
+    </label>
+
+    <input
+      class="limit-value"
+      data-limit-value="%s"
+      type="number"
+      min="0.01"
+      step="0.01"
+      value="%s"
+    >
+
+    <select
+      class="limit-unit"
+      data-limit-unit="%s"
+    >
+      <option value="MiB"%s>MiB</option>
+      <option value="GiB"%s>GiB</option>
+    </select>
+
+    <button
+      class="limit-save"
+      type="button"
+      data-limit-save="%s"
+    >
+      Save
+    </button>
+
+  </div>
+</div>
+"""
+            % (
+                html.escape(label),
+                html.escape(description),
+
+                html.escape(
+                    key,
+                    quote=True
+                ),
+
+                "checked"
+                if enabled
+                else "",
+
+                html.escape(
+                    key,
+                    quote=True
+                ),
+
+                (
+                    "%.2f" % value
+                ).rstrip("0").rstrip("."),
+
+                html.escape(
+                    key,
+                    quote=True
+                ),
+
+                " selected"
+                if unit == "MiB"
+                else "",
+
+                " selected"
+                if unit == "GiB"
+                else "",
+
+                html.escape(
+                    key,
+                    quote=True
+                ),
+            )
+        )
+
+
+
+    # SMART RULES V2 ADVANCED CARDS START
+
+    def advanced_toggle_card(
+        key,
+        label,
+        description,
+    ):
+
+        enabled = bool(
+            advanced.get(
+                key,
+                False
+            )
+        )
+
+        return """
+<div class="rule-card">
+
+  <div class="rule-copy">
+    <div class="rule-title">%s</div>
+
+    <div class="rule-description">
+      %s
+    </div>
+  </div>
+
+  <div class="rule-control">
+
+    <span class="state-pill">
+      %s
+    </span>
+
+    <label class="switch">
+
+      <input
+        class="advanced-toggle"
+        type="checkbox"
+        data-advanced-key="%s"
+        %s
+      >
+
+      <span class="slider"></span>
+
+    </label>
+
+  </div>
+
+</div>
+""" % (
+            html.escape(label),
+            html.escape(description),
+            "ON" if enabled else "OFF",
+            html.escape(
+                key,
+                quote=True
+            ),
+            "checked"
+            if enabled
+            else "",
+        )
+
+
+    advanced_sections = []
+
+
+    groups = (
+
+        (
+            "Source priority",
+            (
+                (
+                    "prefer_remux",
+                    "Prefer Remux",
+                    "Prefer a valid Remux over lower-priority source types. Size and safety rules still apply."
+                ),
+
+                (
+                    "prefer_bluray",
+                    "Prefer BluRay",
+                    "Prefer valid BluRay-sourced releases after Remux."
+                ),
+
+                (
+                    "prefer_webdl",
+                    "Prefer WEB-DL",
+                    "Prefer valid WEB-DL releases over lower-priority source types."
+                ),
+
+                (
+                    "prefer_webrip",
+                    "Prefer WEBRip",
+                    "Give WEBRip a ranking preference when enabled."
+                ),
+
+                (
+                    "prefer_hdtv",
+                    "Prefer HDTV",
+                    "Give HDTV releases a ranking preference when enabled."
+                ),
+            )
+        ),
+
+        (
+            "Video / HDR",
+            (
+                (
+                    "prefer_hdr10plus",
+                    "Prefer HDR10+",
+                    "Prefer HDR10+ among releases that already pass dynamic-range protection."
+                ),
+
+                (
+                    "prefer_10bit",
+                    "Prefer 10-bit video",
+                    "Prefer releases that advertise 10-bit video when otherwise safe."
+                ),
+            )
+        ),
+
+        (
+            "Audio",
+            (
+                (
+                    "prefer_dtsx",
+                    "Prefer DTS:X",
+                    "Prefer DTS:X audio when the candidate already passes audio protection."
+                ),
+
+                (
+                    "prefer_lossless_audio",
+                    "Prefer lossless audio",
+                    "Prefer TrueHD or DTS-HD MA when otherwise safe."
+                ),
+
+                (
+                    "prefer_eac3",
+                    "Prefer E-AC-3 / DD+",
+                    "Prefer E-AC-3 / Dolby Digital Plus when otherwise safe."
+                ),
+            )
+        ),
+
+        (
+            "Release ranking",
+            (
+                (
+                    "prefer_proper_repack",
+                    "Prefer PROPER / REPACK",
+                    "Prefer corrected PROPER or REPACK releases when otherwise valid."
+                ),
+
+                (
+                    "prefer_freeleech",
+                    "Prefer Freeleech",
+                    "Prefer releases reported by the indexer with zero download-volume factor."
+                ),
+
+                (
+                    "prefer_smaller",
+                    "Prefer smaller file on a tie",
+                    "Use smaller size as a ranking preference after higher-priority enabled preferences."
+                ),
+
+                (
+                    "prefer_seeders",
+                    "Prefer more seeders on a tie",
+                    "Use seeder count as a late ranking preference."
+                ),
+            )
+        ),
+    )
+
+
+    for heading, entries in groups:
+
+        cards = "".join(
+            advanced_toggle_card(
+                key,
+                label,
+                description
+            )
+            for (
+                key,
+                label,
+                description
+            )
+            in entries
+        )
+
+        advanced_sections.append(
+            """
+<div style="margin-top:18px">
+
+  <h3 style="margin:0 0 10px">
+    %s
+  </h3>
+
+  <div class="rule-list">
+    %s
+  </div>
+
+</div>
+"""
+            % (
+                html.escape(heading),
+                cards,
+            )
+        )
+
+
+    codec = str(
+        advanced.get(
+            "codec_preference",
+            "none"
+        )
+    )
+
+
+    codec_options = []
+
+    for value, label in (
+        (
+            "none",
+            "No codec preference"
+        ),
+        (
+            "x265",
+            "x265 / HEVC"
+        ),
+        (
+            "x264",
+            "x264 / AVC"
+        ),
+        (
+            "av1",
+            "AV1"
+        ),
+    ):
+
+        codec_options.append(
+            '<option value="%s"%s>%s</option>'
+            % (
+                value,
+
+                " selected"
+                if codec == value
+                else "",
+
+                label,
+            )
+        )
+
+
+    codec_html = """
+<div style="margin-top:18px">
+
+  <h3 style="margin:0 0 10px">
+    Codec
+  </h3>
+
+  <div class="rule-card">
+
+    <div class="rule-copy">
+
+      <div class="rule-title">
+        Preferred video codec
+      </div>
+
+      <div class="rule-description">
+        Ranking preference only. Block AV1 still overrides
+        an AV1 preference when Block AV1 is enabled.
+      </div>
+
+    </div>
+
+    <div class="rule-control">
+
+      <select
+        id="advanced-codec"
+        style="
+          min-height:40px;
+          min-width:190px;
+          padding:0 10px;
+          border-radius:9px;
+          background:#071522;
+          color:#eef7ff;
+          border:1px solid rgba(255,255,255,.16)
+        "
+      >
+        %s
+      </select>
+
+    </div>
+
+  </div>
+
+</div>
+""" % "".join(
+        codec_options
+    )
+
+
+
+    # SMART RULES V2 INDEXER UI START
+
+    selected_indexers = list(
+        advanced.get(
+            "indexer_priority",
+            []
+        )
+        or []
+    )
+
+
+    all_indexers = list(
+        available_indexers
+        or []
+    )
+
+
+    # Keep saved indexers visible even if an indexer has
+    # temporarily disappeared from the Arr API response.
+    for name in selected_indexers:
+
+        if name not in all_indexers:
+            all_indexers.append(
+                name
+            )
+
+
+    all_indexers = sorted(
+        all_indexers,
+        key=lambda value:
+            value.lower()
+    )
+
+
+    indexer_options = []
+
+    for name in all_indexers:
+
+        indexer_options.append(
+            '<option value="%s">%s</option>'
+            % (
+                html.escape(
+                    name,
+                    quote=True
+                ),
+                html.escape(
+                    name
+                ),
+            )
+        )
+
+
+    preferred_rows = []
+
+    for position, name in enumerate(
+        selected_indexers,
+        1
+    ):
+
+        preferred_rows.append(
+            """
+<div
+  class="preferred-indexer-row"
+  data-indexer="%s"
+  style="
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:10px 12px;
+    margin-top:7px;
+    border-radius:10px;
+    background:rgba(3,13,24,.68);
+    border:1px solid rgba(255,255,255,.07)
+  "
+>
+
+  <span
+    class="indexer-position"
+    style="
+      width:28px;
+      font-weight:900;
+      color:var(--accent)
+    "
+  >
+    %d.
+  </span>
+
+  <span
+    class="indexer-name"
+    style="
+      flex:1;
+      font-weight:650
+    "
+  >
+    %s
+  </span>
+
+  <button
+    type="button"
+    data-indexer-action="up"
+    title="Move up"
+  >↑</button>
+
+  <button
+    type="button"
+    data-indexer-action="down"
+    title="Move down"
+  >↓</button>
+
+  <button
+    type="button"
+    data-indexer-action="remove"
+    title="Remove"
+  >×</button>
+
+</div>
+"""
+            % (
+                html.escape(
+                    name,
+                    quote=True
+                ),
+                position,
+                html.escape(
+                    name
+                ),
+            )
+        )
+
+
+    if indexer_error:
+
+        indexer_status = (
+            "Could not refresh the configured "
+            + title
+            + " indexers: "
+            + html.escape(
+                indexer_error
+            )
+        )
+
+    else:
+
+        indexer_status = (
+            "%d configured indexer%s loaded from %s."
+            % (
+                len(
+                    available_indexers
+                    or []
+                ),
+                ""
+                if len(
+                    available_indexers
+                    or []
+                ) == 1
+                else "s",
+                title,
+            )
+        )
+
+
+    indexer_html = """
+<div style="margin-top:22px">
+
+  <h3 style="margin:0 0 8px">
+    Preferred indexers / trackers
+  </h3>
+
+  <div
+    class="rule-description"
+    style="margin-bottom:12px"
+  >
+    Choose from the indexers currently configured in %s.
+    Position 1 has the highest priority. Indexers not in this
+    list remain valid fallbacks.
+  </div>
+
+  <div
+    style="
+      color:rgba(200,218,238,.70);
+      font-size:.82rem;
+      margin-bottom:10px
+    "
+  >
+    %s
+  </div>
+
+  <div
+    style="
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      align-items:center
+    "
+  >
+
+    <select
+      id="indexer-picker"
+      style="
+        flex:1 1 260px;
+        min-height:40px;
+        padding:0 10px;
+        border-radius:9px;
+        background:#071522;
+        color:#eef7ff;
+        border:1px solid rgba(255,255,255,.16)
+      "
+    >
+
+      <option value="">
+        Choose configured indexer…
+      </option>
+
+      %s
+
+    </select>
+
+    <button
+      id="add-preferred-indexer"
+      type="button"
+    >
+      Add
+    </button>
+
+    <button
+      id="save-preferred-indexers"
+      type="button"
+    >
+      Save favorites
+    </button>
+
+  </div>
+
+
+  <div
+    id="preferred-indexers"
+    style="margin-top:10px"
+  >
+    %s
+  </div>
+
+</div>
+
+    # SMART RULES V2 INDEXER UI END
+""" % (
+        html.escape(
+            title
+        ),
+        indexer_status,
+        "".join(
+            indexer_options
+        ),
+        "".join(
+            preferred_rows
+        ),
+    )
+
+
+    advanced_html = """
+<section class="rules-section">
+
+  <div class="section-heading">
+
+    <h2>
+      Advanced ranking preferences
+    </h2>
+
+    <p>
+      These controls only rank candidates that already passed
+      the optimizer's hard safety and eligibility checks.
+    </p>
+
+  </div>
+
+  %s
+
+  %s
+
+  %s
+
+</section>
+""" % (
+        "".join(
+            advanced_sections
+        ),
+        codec_html,
+        indexer_html,
+    )
+
+    # SMART RULES V2 ADVANCED CARDS END
+
+
+    # ========================================================
+    # LOCKED SAFETY RULES
+    #
+    # Hide rules that have now become configurable controls.
+    # ========================================================
+
+    locked_cards = []
+
+    locked = (
+        RULE_LOCKED.get(
+            app,
+            ()
+        )
+    )
+
+
+    def reclassified_locked_rule(label):
+
+        value = str(
+            label
+            or ""
+        ).strip().lower()
+
+
+        if value.startswith(
+            "minimum current"
+        ):
+            return True
+
+        if value in (
+            "1080p replacement ceiling",
+            "uhd-profile resolution guard",
+        ):
+            return True
+
+
+        if (
+            "1080" in value
+            and (
+                "replacement" in value
+                or "ceiling" in value
+            )
+            and "size" in value
+        ):
+            return True
+
+
+        if (
+            "configured" in value
+            and "saving" in value
+        ):
+            return True
+
+
+        if (
+            "720" in value
+            and "growth" in value
+        ):
+            return True
+
+
+        return False
+
+
+    for entry in locked:
+
+        if not isinstance(
+            entry,
+            (list, tuple)
+        ):
+            continue
+
+        if len(entry) < 2:
+            continue
+
+        label = str(
+            entry[0]
+            or ""
+        )
+
+        description = str(
+            entry[1]
+            or ""
+        )
+
+
+        if reclassified_locked_rule(
+            label
+        ):
+            continue
+
+
+        locked_cards.append(
+            """
+<div class="locked-card">
+  <div>
+    <div class="rule-title">%s</div>
+    <div class="rule-description">%s</div>
+  </div>
+
+  <span class="locked-pill">
+    LOCKED ON
+  </span>
+</div>
+"""
+            % (
+                html.escape(label),
+                html.escape(description),
+            )
+        )
+
+
+    template = r"""<!doctype html>
+<html>
+<head>
+
+<meta charset="utf-8">
+<meta
+  name="viewport"
+  content="width=device-width,initial-scale=1"
+>
+
+<title>Smart Optimizer · __TITLE__ Rules</title>
+
+<style>
+
+__BASE_CSS__
+
+*{
+    box-sizing:border-box;
+}
+
+html,
+body{
+    margin:0;
+    min-height:100%;
+}
+
+body.rules-body{
+
+    --accent:__ACCENT__;
+    --accent-rgb:__ACCENT_RGB__;
+
+    min-height:100vh;
+
+    color:#eef6ff;
+
+    font-family:
+        Inter,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+    background:
+        linear-gradient(
+            180deg,
+            rgba(1,7,14,.34),
+            rgba(1,7,14,.55)
+        ),
+        url('__BACKGROUND__')
+        center center / cover
+        no-repeat fixed;
+}
+
+
+.rules-shell{
+
+    width:min(
+        1180px,
+        calc(100vw - 42px)
+    );
+
+    margin:0 auto;
+
+    padding:
+        28px 0
+        56px;
+}
+
+
+.rules-top{
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:
+        space-between;
+
+    gap:18px;
+
+    margin-bottom:
+        20px;
+
+    padding:
+        18px 20px;
+
+    border-radius:
+        20px;
+
+    background:
+        rgba(5,16,29,.88);
+
+    border:
+        1px solid
+        rgba(
+            var(--accent-rgb),
+            .30
+        );
+
+    backdrop-filter:
+        blur(14px);
+}
+
+
+.rules-brand{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:14px;
+}
+
+
+.rules-icon{
+
+    width:48px;
+    height:48px;
+}
+
+
+.rules-icon img{
+
+    width:100%;
+    height:100%;
+
+    object-fit:contain;
+}
+
+
+.rules-title h1{
+
+    margin:0;
+
+    font-size:
+        1.55rem;
+}
+
+
+.rules-title p{
+
+    margin:
+        5px 0 0;
+
+    color:
+        rgba(210,224,242,.70);
+}
+
+
+.back-link{
+
+    min-height:40px;
+
+    display:inline-flex;
+
+    align-items:center;
+
+    padding:
+        0 15px;
+
+    border-radius:
+        999px;
+
+    color:#eef7ff;
+
+    text-decoration:none;
+
+    background:
+        rgba(6,21,36,.78);
+
+    border:
+        1px solid
+        rgba(
+            var(--accent-rgb),
+            .38
+        );
+}
+
+
+.rules-summary{
+
+    margin-bottom:
+        18px;
+
+    padding:
+        13px 16px;
+
+    border-radius:
+        14px;
+
+    background:
+        rgba(6,19,33,.82);
+
+    border:
+        1px solid
+        rgba(
+            var(--accent-rgb),
+            .20
+        );
+
+    color:
+        rgba(224,235,249,.82);
+}
+
+
+.rules-section{
+
+    margin-bottom:
+        18px;
+
+    padding:
+        18px;
+
+    border-radius:
+        18px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(10,27,47,.91),
+            rgba(5,16,29,.90)
+        );
+
+    border:
+        1px solid
+        rgba(
+            var(--accent-rgb),
+            .18
+        );
+
+    box-shadow:
+        0 16px 38px
+        rgba(0,0,0,.22);
+}
+
+
+.section-heading{
+
+    margin-bottom:
+        13px;
+}
+
+
+.section-heading h2{
+
+    margin:0;
+
+    font-size:
+        1.08rem;
+}
+
+
+.section-heading p{
+
+    margin:
+        5px 0 0;
+
+    color:
+        rgba(205,220,239,.62);
+
+    font-size:
+        .86rem;
+}
+
+
+.rule-list{
+
+    display:grid;
+
+    gap:10px;
+}
+
+
+.rule-card,
+.locked-card{
+
+    min-height:
+        76px;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:
+        space-between;
+
+    gap:18px;
+
+    padding:
+        14px 15px;
+
+    border-radius:
+        14px;
+
+    background:
+        rgba(3,13,24,.68);
+
+    border:
+        1px solid
+        rgba(255,255,255,.065);
+}
+
+
+.rule-copy{
+
+    min-width:0;
+
+    flex:1;
+}
+
+
+.rule-title{
+
+    font-weight:
+        720;
+
+    color:#f5f9ff;
+}
+
+
+.rule-description{
+
+    margin-top:
+        4px;
+
+    color:
+        rgba(202,218,239,.66);
+
+    font-size:
+        .84rem;
+
+    line-height:
+        1.4;
+}
+
+
+.rule-control{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:10px;
+
+    flex:0 0 auto;
+}
+
+
+.state-pill,
+.locked-pill{
+
+    min-width:
+        44px;
+
+    text-align:center;
+
+    padding:
+        5px 8px;
+
+    border-radius:
+        999px;
+
+    font-size:
+        .72rem;
+
+    font-weight:
+        760;
+
+    letter-spacing:
+        .04em;
+
+    background:
+        rgba(
+            var(--accent-rgb),
+            .10
+        );
+
+    border:
+        1px solid
+        rgba(
+            var(--accent-rgb),
+            .24
+        );
+}
+
+
+.locked-pill{
+
+    min-width:
+        82px;
+
+    color:
+        rgba(225,235,247,.78);
+}
+
+
+.switch{
+
+    position:relative;
+
+    width:46px;
+
+    height:26px;
+
+    flex:
+        0 0 46px;
+}
+
+
+.switch input{
+
+    opacity:0;
+
+    width:0;
+
+    height:0;
+}
+
+
+.slider{
+
+    position:absolute;
+
+    inset:0;
+
+    cursor:pointer;
+
+    border-radius:
+        999px;
+
+    background:
+        rgba(87,105,128,.42);
+
+    border:
+        1px solid
+        rgba(255,255,255,.08);
+
+    transition:
+        .18s;
+}
+
+
+.slider::before{
+
+    content:"";
+
+    position:absolute;
+
+    width:18px;
+
+    height:18px;
+
+    left:3px;
+
+    top:3px;
+
+    border-radius:
+        50%;
+
+    background:#dce8f7;
+
+    transition:
+        .18s;
+}
+
+
+.switch input:checked + .slider{
+
+    background:
+        rgba(
+            var(--accent-rgb),
+            .48
+        );
+
+    border-color:
+        rgba(
+            var(--accent-rgb),
+            .78
+        );
+}
+
+
+.switch input:checked + .slider::before{
+
+    transform:
+        translateX(20px);
+
+    background:#fff;
+}
+
+
+.growth-preview{
+
+    margin-top:
+        8px;
+
+    color:
+        rgba(214,229,246,.76);
+
+    font-size:
+        .80rem;
+}
+
+
+.growth-preview span{
+
+    color:
+        rgba(183,201,224,.52);
+}
+
+
+.growth-controls{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:8px;
+
+    flex-wrap:wrap;
+
+    margin-top:12px;
+}
+
+
+.growth-label{
+
+    color:
+        rgba(221,233,248,.82);
+
+    font-size:.82rem;
+
+    font-weight:700;
+}
+
+
+.growth-value{
+
+    width:82px;
+
+    min-height:36px;
+
+    padding:
+        0 9px;
+
+    color:#f3f8ff;
+
+    background:
+        rgba(0,8,17,.72);
+
+    border:
+        1px solid
+        rgba(
+            var(--accent-rgb),
+            .28
+        );
+
+    border-radius:9px;
+}
+
+
+.growth-separator,
+.growth-percent{
+
+    color:
+        rgba(211,225,243,.70);
+}
+
+
+.growth-save{
+
+    min-height:36px;
+
+    padding:
+        0 12px;
+
+    color:#fff;
+
+    cursor:pointer;
+
+    border-radius:9px;
+
+    border:
+        1px solid
+        rgba(
+            var(--accent-rgb),
+            .48
+        );
+
+    background:
+        rgba(
+            var(--accent-rgb),
+            .18
+        );
+}
+
+
+.growth-save:hover{
+
+    border-color:
+        rgba(
+            var(--accent-rgb),
+            .82
+        );
+}
+
+
+
+.limit-card{
+
+    align-items:center;
+}
+
+
+.limit-controls{
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:flex-end;
+
+    gap:8px;
+
+    flex-wrap:wrap;
+}
+
+
+.limit-value{
+
+    width:90px;
+
+    min-height:38px;
+
+    padding:
+        0 10px;
+
+    color:#f3f8ff;
+
+    background:
+        rgba(0,8,17,.72);
+
+    border:
+        1px solid
+        rgba(
+            var(--accent-rgb),
+            .28
+        );
+
+    border-radius:9px;
+}
+
+
+.limit-unit{
+
+    min-height:38px;
+
+    padding:
+        0 8px;
+
+    color:#f3f8ff;
+
+    background:
+        rgba(0,8,17,.72);
+
+    border:
+        1px solid
+        rgba(
+            var(--accent-rgb),
+            .28
+        );
+
+    border-radius:9px;
+}
+
+
+.limit-save{
+
+    min-height:38px;
+
+    padding:
+        0 13px;
+
+    color:#fff;
+
+    cursor:pointer;
+
+    border-radius:9px;
+
+    border:
+        1px solid
+        rgba(
+            var(--accent-rgb),
+            .48
+        );
+
+    background:
+        rgba(
+            var(--accent-rgb),
+            .18
+        );
+}
+
+
+.downsize-note{
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:
+        space-between;
+
+    gap:16px;
+
+    padding:
+        14px 15px;
+
+    border-radius:
+        14px;
+
+    background:
+        rgba(3,13,24,.68);
+
+    border:
+        1px solid
+        rgba(255,255,255,.065);
+}
+
+
+.downsize-value{
+
+    font-size:
+        1.05rem;
+
+    font-weight:
+        760;
+
+    color:
+        var(--accent);
+}
+
+
+.save-state{
+
+    position:sticky;
+
+    bottom:14px;
+
+    margin:
+        18px auto 0;
+
+    width:
+        fit-content;
+
+    max-width:
+        calc(100vw - 40px);
+
+    padding:
+        10px 15px;
+
+    border-radius:
+        999px;
+
+    color:
+        rgba(226,237,250,.80);
+
+    background:
+        rgba(2,10,19,.94);
+
+    border:
+        1px solid
+        rgba(
+            var(--accent-rgb),
+            .25
+        );
+
+    box-shadow:
+        0 10px 28px
+        rgba(0,0,0,.28);
+}
+
+
+.save-state.good{
+
+    color:#c8ffd9;
+
+    border-color:
+        rgba(80,225,128,.35);
+}
+
+
+.save-state.bad{
+
+    color:#ffd0d0;
+
+    border-color:
+        rgba(255,92,92,.42);
+}
+
+
+@media(max-width:720px){
+
+    .rules-shell{
+
+        width:
+            min(
+                100% - 20px,
+                1180px
+            );
+
+        padding-top:
+            12px;
+    }
+
+
+    .rules-top{
+
+        align-items:
+            flex-start;
+
+        flex-direction:
+            column;
+    }
+
+
+    .rule-card,
+    .locked-card{
+
+        align-items:
+            flex-start;
+
+        flex-direction:
+            column;
+    }
+
+
+    .rule-control,
+    .limit-controls{
+
+        width:100%;
+
+        justify-content:
+            space-between;
+    }
+
+
+    .limit-value{
+
+        flex:1;
+    }
+}
+
+</style>
+
+</head>
+
+<body class="rules-body">
+
+<div class="rules-shell">
+
+  <header class="rules-top">
+
+    <div class="rules-brand">
+
+      <div class="rules-icon">
+        <img
+          src="__ICON__"
+          alt="__TITLE__"
+        >
+      </div>
+
+      <div class="rules-title">
+        <h1>__TITLE__ RULES</h1>
+        <p>
+          Live optimizer policy controls.
+        </p>
+      </div>
+
+    </div>
+
+    <a
+      class="back-link"
+      href="__DASHBOARD__"
+    >
+      ← Back to __TITLE__
+    </a>
+
+  </header>
+
+
+  <div class="rules-summary">
+
+    Resolution paths, Growth ranges and optional size thresholds
+    are configured here. Changes save directly to the live optimizer policy.
+
+  </div>
+
+
+  <section class="rules-section">
+
+    <div class="section-heading">
+      <h2>Downsize</h2>
+      <p>
+        Current same-resolution / shrinking-candidate range.
+      </p>
+    </div>
+
+    <div class="downsize-note">
+
+      <div>
+        <div class="rule-title">
+          Current Downsize range
+        </div>
+
+        <div class="rule-description">
+          Existing dashboard setting.
+        </div>
+      </div>
+
+      <div class="downsize-value">
+        __DOWN_MIN__% – __DOWN_MAX__%
+      </div>
+
+    </div>
+
+  </section>
+
+
+  <section class="rules-section">
+
+    <div class="section-heading">
+      <h2>Allowed resolution upgrades</h2>
+      <p>
+        Each path is independent. 2160p upgrade paths retain
+        the UHD-profile requirement.
+      </p>
+    </div>
+
+    <div class="rule-list">
+      __PATH_CARDS__
+    </div>
+
+  </section>
+
+
+  <section class="rules-section">
+
+    <div class="section-heading">
+      <h2>Optional size thresholds</h2>
+      <p>
+        Toggle a threshold on or off and choose its own MiB or GiB value.
+      </p>
+    </div>
+
+    <div class="rule-list">
+      __LIMIT_CARDS__
+    </div>
+
+  </section>
+
+
+  __SELECTABLE_SECTIONS__
+
+  __ADVANCED_PREFS__
+
+
+  <section class="rules-section">
+
+    <div class="section-heading">
+      <h2>Locked safety rules</h2>
+      <p>
+        Core integrity and downgrade protections stay enabled.
+      </p>
+    </div>
+
+    <div class="rule-list">
+      __LOCKED_CARDS__
+    </div>
+
+  </section>
+
+
+  <div
+    id="save-state"
+    class="save-state"
+  >
+    Changes save immediately.
+  </div>
+
+</div>
+
+
+<script>
+
+(function(){
+
+    "use strict";
+
+    const APP = __APP_JS__;
+
+    const saveState =
+        document.getElementById(
+            "save-state"
+        );
+
+
+    function status(
+        message,
+        kind
+    ){
+
+        saveState.textContent =
+            message;
+
+        saveState.className =
+            "save-state"
+            + (
+                kind
+                ? " " + kind
+                : ""
+            );
+    }
+
+
+    async function post(
+        url,
+        values
+    ){
+
+        const body =
+            new URLSearchParams();
+
+        Object.keys(values)
+            .forEach(
+                function(key){
+                    body.set(
+                        key,
+                        String(values[key])
+                    );
+                }
+            );
+
+
+        const response =
+            await fetch(
+                url,
+                {
+                    method:"POST",
+
+                    headers:{
+                        "Content-Type":
+                            "application/x-www-form-urlencoded"
+                    },
+
+                    credentials:
+                        "same-origin",
+
+                    body:
+                        body.toString()
+                }
+            );
+
+
+        let result = {};
+
+        try{
+            result =
+                await response.json();
+        }
+        catch(_error){
+            result = {};
+        }
+
+
+        if(
+            !response.ok
+            || result.ok === false
+        ){
+            throw new Error(
+                result.error
+                || (
+                    "HTTP "
+                    + response.status
+                )
+            );
+        }
+
+
+        return result;
+    }
+
+
+    document
+        .querySelectorAll(
+            ".rule-toggle"
+        )
+        .forEach(
+            function(input){
+
+                input.addEventListener(
+                    "change",
+                    async function(){
+
+                        const wanted =
+                            input.checked;
+
+                        const card =
+                            input.closest(
+                                ".rule-card"
+                            );
+
+                        const pill =
+                            card.querySelector(
+                                ".state-pill"
+                            );
+
+
+                        input.disabled =
+                            true;
+
+                        status(
+                            "Saving rule…"
+                        );
+
+
+                        try{
+
+                            await post(
+                                "/rules-settings",
+                                {
+                                    app:APP,
+                                    key:
+                                        input.dataset.rule,
+                                    enabled:
+                                        wanted
+                                        ? 1
+                                        : 0
+                                }
+                            );
+
+                            pill.textContent =
+                                wanted
+                                ? "ON"
+                                : "OFF";
+
+                            status(
+                                "Rule saved.",
+                                "good"
+                            );
+                        }
+                        catch(error){
+
+                            input.checked =
+                                !wanted;
+
+                            status(
+                                "Save failed: "
+                                + error.message,
+                                "bad"
+                            );
+                        }
+                        finally{
+
+                            input.disabled =
+                                false;
+                        }
+                    }
+                );
+            }
+        );
+
+
+    document
+        .querySelectorAll(
+            ".path-toggle"
+        )
+        .forEach(
+            function(input){
+
+                input.addEventListener(
+                    "change",
+                    async function(){
+
+                        const wanted =
+                            input.checked;
+
+                        const card =
+                            input.closest(
+                                ".rule-card"
+                            );
+
+                        const pill =
+                            card.querySelector(
+                                ".state-pill"
+                            );
+
+
+                        input.disabled =
+                            true;
+
+                        status(
+                            "Saving resolution path…"
+                        );
+
+
+                        try{
+
+                            await post(
+                                "/resolution-policy-settings",
+                                {
+                                    app:APP,
+                                    kind:"path",
+                                    key:
+                                        input.dataset.path,
+                                    enabled:
+                                        wanted
+                                        ? 1
+                                        : 0
+                                }
+                            );
+
+                            pill.textContent =
+                                wanted
+                                ? "ON"
+                                : "OFF";
+
+                            status(
+                                "Resolution path saved.",
+                                "good"
+                            );
+                        }
+                        catch(error){
+
+                            input.checked =
+                                !wanted;
+
+                            status(
+                                "Save failed: "
+                                + error.message,
+                                "bad"
+                            );
+                        }
+                        finally{
+
+                            input.disabled =
+                                false;
+                        }
+                    }
+                );
+            }
+        );
+
+
+    // SMART RULES V2 ADVANCED SAVE JS START
+
+    function collectAdvancedPreferences(){
+
+        const settings = {};
+
+        document
+            .querySelectorAll(
+                ".advanced-toggle"
+            )
+            .forEach(
+                function(input){
+
+                    settings[
+                        input.dataset.advancedKey
+                    ] = input.checked;
+                }
+            );
+
+
+        const codec =
+            document.getElementById(
+                "advanced-codec"
+            );
+
+        settings.codec_preference =
+            codec
+            ? codec.value
+            : "none";
+
+
+        return settings;
+    }
+
+
+    async function saveAdvancedPreferences(
+        message
+    ){
+
+        status(
+            message
+            || "Saving preference…"
+        );
+
+
+        await post(
+            "/advanced-preferences-settings",
+            {
+                app:APP,
+
+                settings:
+                    JSON.stringify(
+                        collectAdvancedPreferences()
+                    )
+            }
+        );
+
+
+        document
+            .querySelectorAll(
+                ".advanced-toggle"
+            )
+            .forEach(
+                function(input){
+
+                    const card =
+                        input.closest(
+                            ".rule-card"
+                        );
+
+                    if(!card){
+                        return;
+                    }
+
+
+                    const pill =
+                        card.querySelector(
+                            ".state-pill"
+                        );
+
+                    if(pill){
+
+                        pill.textContent =
+                            input.checked
+                            ? "ON"
+                            : "OFF";
+                    }
+                }
+            );
+
+
+        status(
+            "Preference saved.",
+            "good"
+        );
+    }
+
+
+    document
+        .querySelectorAll(
+            ".advanced-toggle"
+        )
+        .forEach(
+            function(input){
+
+                input.addEventListener(
+                    "change",
+                    async function(){
+
+                        const wanted =
+                            input.checked;
+
+                        input.disabled =
+                            true;
+
+
+                        try{
+
+                            await saveAdvancedPreferences(
+                                "Saving preference…"
+                            );
+
+                        }
+                        catch(error){
+
+                            input.checked =
+                                !wanted;
+
+                            status(
+                                "Save failed: "
+                                + error.message,
+                                "bad"
+                            );
+                        }
+                        finally{
+
+                            input.disabled =
+                                false;
+                        }
+                    }
+                );
+            }
+        );
+
+
+    const advancedCodec =
+        document.getElementById(
+            "advanced-codec"
+        );
+
+
+    if(advancedCodec){
+
+        advancedCodec.dataset.savedValue =
+            advancedCodec.value;
+
+
+        advancedCodec.addEventListener(
+            "change",
+            async function(){
+
+                const oldValue =
+                    advancedCodec.dataset.savedValue;
+
+
+                advancedCodec.disabled =
+                    true;
+
+
+                try{
+
+                    await saveAdvancedPreferences(
+                        "Saving codec preference…"
+                    );
+
+                    advancedCodec.dataset.savedValue =
+                        advancedCodec.value;
+
+                }
+                catch(error){
+
+                    advancedCodec.value =
+                        oldValue;
+
+                    status(
+                        "Save failed: "
+                        + error.message,
+                        "bad"
+                    );
+                }
+                finally{
+
+                    advancedCodec.disabled =
+                        false;
+                }
+            }
+        );
+    }
+
+
+
+    // SMART RULES V2 INDEXER JS START
+
+    function preferredIndexerRows(){
+
+        return Array.from(
+            document.querySelectorAll(
+                ".preferred-indexer-row"
+            )
+        );
+    }
+
+
+    function preferredIndexerNames(){
+
+        return preferredIndexerRows()
+            .map(
+                function(row){
+
+                    return (
+                        row.dataset.indexer
+                        || ""
+                    ).trim();
+                }
+            )
+            .filter(
+                function(name){
+
+                    return Boolean(name);
+                }
+            );
+    }
+
+
+    function renumberPreferredIndexers(){
+
+        preferredIndexerRows()
+            .forEach(
+                function(row, index){
+
+                    const position =
+                        row.querySelector(
+                            ".indexer-position"
+                        );
+
+                    if(position){
+
+                        position.textContent =
+                            String(index + 1)
+                            + ".";
+                    }
+                }
+            );
+    }
+
+
+    function createPreferredIndexerRow(
+        name
+    ){
+
+        const row =
+            document.createElement(
+                "div"
+            );
+
+        row.className =
+            "preferred-indexer-row";
+
+        row.dataset.indexer =
+            name;
+
+        row.style.display =
+            "flex";
+
+        row.style.alignItems =
+            "center";
+
+        row.style.gap =
+            "10px";
+
+        row.style.padding =
+            "10px 12px";
+
+        row.style.marginTop =
+            "7px";
+
+        row.style.borderRadius =
+            "10px";
+
+        row.style.background =
+            "rgba(3,13,24,.68)";
+
+        row.style.border =
+            "1px solid rgba(255,255,255,.07)";
+
+
+        const position =
+            document.createElement(
+                "span"
+            );
+
+        position.className =
+            "indexer-position";
+
+        position.style.width =
+            "28px";
+
+        position.style.fontWeight =
+            "900";
+
+        position.style.color =
+            "var(--accent)";
+
+
+        const label =
+            document.createElement(
+                "span"
+            );
+
+        label.className =
+            "indexer-name";
+
+        label.style.flex =
+            "1";
+
+        label.style.fontWeight =
+            "650";
+
+        label.textContent =
+            name;
+
+
+        const actions = (
+            [
+                [
+                    "up",
+                    "↑",
+                    "Move up"
+                ],
+
+                [
+                    "down",
+                    "↓",
+                    "Move down"
+                ],
+
+                [
+                    "remove",
+                    "×",
+                    "Remove"
+                ],
+            ]
+        );
+
+
+        row.appendChild(
+            position
+        );
+
+        row.appendChild(
+            label
+        );
+
+
+        actions.forEach(
+            function(definition){
+
+                const button =
+                    document.createElement(
+                        "button"
+                    );
+
+                button.type =
+                    "button";
+
+                button.dataset.indexerAction =
+                    definition[0];
+
+                button.textContent =
+                    definition[1];
+
+                button.title =
+                    definition[2];
+
+                row.appendChild(
+                    button
+                );
+            }
+        );
+
+
+        return row;
+    }
+
+
+    const addPreferredIndexer =
+        document.getElementById(
+            "add-preferred-indexer"
+        );
+
+
+    if(addPreferredIndexer){
+
+        addPreferredIndexer.addEventListener(
+            "click",
+            function(){
+
+                const picker =
+                    document.getElementById(
+                        "indexer-picker"
+                    );
+
+                const container =
+                    document.getElementById(
+                        "preferred-indexers"
+                    );
+
+
+                if(
+                    !picker
+                    || !container
+                    || !picker.value
+                ){
+                    return;
+                }
+
+
+                const wanted =
+                    picker.value;
+
+
+                const alreadyExists =
+                    preferredIndexerNames()
+                        .some(
+                            function(name){
+
+                                return (
+                                    name.toLowerCase()
+                                    === wanted.toLowerCase()
+                                );
+                            }
+                        );
+
+
+                if(alreadyExists){
+
+                    status(
+                        "That indexer is already in the preferred list."
+                    );
+
+                    return;
+                }
+
+
+                container.appendChild(
+                    createPreferredIndexerRow(
+                        wanted
+                    )
+                );
+
+
+                renumberPreferredIndexers();
+
+
+                status(
+                    "Indexer added. Press Save favorites to apply.",
+                    "good"
+                );
+            }
+        );
+    }
+
+
+    const preferredIndexerContainer =
+        document.getElementById(
+            "preferred-indexers"
+        );
+
+
+    if(preferredIndexerContainer){
+
+        preferredIndexerContainer.addEventListener(
+            "click",
+            function(event){
+
+                const button =
+                    event.target.closest(
+                        "[data-indexer-action]"
+                    );
+
+
+                if(!button){
+                    return;
+                }
+
+
+                const row =
+                    button.closest(
+                        ".preferred-indexer-row"
+                    );
+
+
+                if(!row){
+                    return;
+                }
+
+
+                const action =
+                    button.dataset.indexerAction;
+
+
+                if(
+                    action === "up"
+                    && row.previousElementSibling
+                ){
+
+                    row.parentNode.insertBefore(
+                        row,
+                        row.previousElementSibling
+                    );
+                }
+
+
+                else if(
+                    action === "down"
+                    && row.nextElementSibling
+                ){
+
+                    row.parentNode.insertBefore(
+                        row.nextElementSibling,
+                        row
+                    );
+                }
+
+
+                else if(
+                    action === "remove"
+                ){
+
+                    row.remove();
+                }
+
+
+                renumberPreferredIndexers();
+
+
+                status(
+                    "Preferred indexer order changed. Press Save favorites to apply."
+                );
+            }
+        );
+    }
+
+
+    const savePreferredIndexers =
+        document.getElementById(
+            "save-preferred-indexers"
+        );
+
+
+    if(savePreferredIndexers){
+
+        savePreferredIndexers.addEventListener(
+            "click",
+            async function(){
+
+                savePreferredIndexers.disabled =
+                    true;
+
+
+                try{
+
+                    status(
+                        "Saving preferred indexers…"
+                    );
+
+
+                    await post(
+                        "/advanced-preferences-settings",
+                        {
+                            app:APP,
+
+                            settings:
+                                JSON.stringify({
+                                    indexer_priority:
+                                        preferredIndexerNames()
+                                })
+                        }
+                    );
+
+
+                    status(
+                        "Preferred indexers saved.",
+                        "good"
+                    );
+
+                }
+                catch(error){
+
+                    status(
+                        "Save failed: "
+                        + error.message,
+                        "bad"
+                    );
+                }
+                finally{
+
+                    savePreferredIndexers.disabled =
+                        false;
+                }
+            }
+        );
+    }
+
+
+    renumberPreferredIndexers();
+
+    // SMART RULES V2 INDEXER JS END
+
+
+    // SMART RULES V2 ADVANCED SAVE JS END
+
+
+    async function saveGrowth(
+        key
+    ){
+
+        const minimum =
+            document.querySelector(
+                '[data-growth-min="'
+                + key
+                + '"]'
+            );
+
+        const maximum =
+            document.querySelector(
+                '[data-growth-max="'
+                + key
+                + '"]'
+            );
+
+        const button =
+            document.querySelector(
+                '[data-growth-save="'
+                + key
+                + '"]'
+            );
+
+
+        button.disabled =
+            true;
+
+        minimum.disabled =
+            true;
+
+        maximum.disabled =
+            true;
+
+
+        status(
+            "Saving Growth range…"
+        );
+
+
+        try{
+
+            await post(
+                "/resolution-policy-settings",
+                {
+                    app:APP,
+                    kind:"growth",
+                    key:key,
+
+                    min_percent:
+                        minimum.value,
+
+                    max_percent:
+                        maximum.value
+                }
+            );
+
+
+            status(
+                "Growth range saved.",
+                "good"
+            );
+        }
+        catch(error){
+
+            status(
+                "Save failed: "
+                + error.message,
+                "bad"
+            );
+        }
+        finally{
+
+            button.disabled =
+                false;
+
+            minimum.disabled =
+                false;
+
+            maximum.disabled =
+                false;
+        }
+    }
+
+
+    document
+        .querySelectorAll(
+            ".growth-save"
+        )
+        .forEach(
+            function(button){
+
+                button.addEventListener(
+                    "click",
+                    function(){
+
+                        saveGrowth(
+                            button.dataset.growthSave
+                        );
+                    }
+                );
+            }
+        );
+
+
+    async function saveLimit(
+        key
+    ){
+
+        const toggle =
+            document.querySelector(
+                '[data-limit="'
+                + key
+                + '"]'
+            );
+
+        const value =
+            document.querySelector(
+                '[data-limit-value="'
+                + key
+                + '"]'
+            );
+
+        const unit =
+            document.querySelector(
+                '[data-limit-unit="'
+                + key
+                + '"]'
+            );
+
+        const button =
+            document.querySelector(
+                '[data-limit-save="'
+                + key
+                + '"]'
+            );
+
+
+        button.disabled =
+            true;
+
+        toggle.disabled =
+            true;
+
+        status(
+            "Saving size threshold…"
+        );
+
+
+        try{
+
+            await post(
+                "/resolution-policy-settings",
+                {
+                    app:APP,
+                    kind:"limit",
+                    key:key,
+                    enabled:
+                        toggle.checked
+                        ? 1
+                        : 0,
+                    value:
+                        value.value,
+                    unit:
+                        unit.value
+                }
+            );
+
+            status(
+                "Size threshold saved.",
+                "good"
+            );
+        }
+        catch(error){
+
+            status(
+                "Save failed: "
+                + error.message,
+                "bad"
+            );
+        }
+        finally{
+
+            button.disabled =
+                false;
+
+            toggle.disabled =
+                false;
+        }
+    }
+
+
+    document
+        .querySelectorAll(
+            ".limit-save"
+        )
+        .forEach(
+            function(button){
+
+                button.addEventListener(
+                    "click",
+                    function(){
+
+                        saveLimit(
+                            button.dataset.limitSave
+                        );
+                    }
+                );
+            }
+        );
+
+
+    document
+        .querySelectorAll(
+            ".limit-toggle"
+        )
+        .forEach(
+            function(toggle){
+
+                toggle.addEventListener(
+                    "change",
+                    function(){
+
+                        saveLimit(
+                            toggle.dataset.limit
+                        );
+                    }
+                );
+            }
+        );
+
+})();
+
+</script>
+
+</body>
+</html>
+"""
+
+
+    replacements = {
+
+        "__BASE_CSS__":
+            "",
+
+        "__TITLE__":
+            html.escape(title),
+
+        "__ACCENT__":
+            accent,
+
+        "__ACCENT_RGB__":
+            accent_rgb,
+
+        "__BACKGROUND__":
+            background,
+
+        "__ICON__":
+            icon,
+
+        "__DASHBOARD__":
+            dashboard,
+
+        "__DOWN_MIN__":
+            "%.1f"
+            % float(down_min),
+
+        "__DOWN_MAX__":
+            "%.1f"
+            % float(down_max),
+
+        "__PATH_CARDS__":
+            "".join(
+                path_cards
+            ),
+
+        "__LIMIT_CARDS__":
+            "".join(
+                limit_cards
+            ),
+
+        "__SELECTABLE_SECTIONS__":
+            "".join(
+                selectable_html
+            ),
+
+        "__ADVANCED_PREFS__":
+            advanced_html,
+
+        "__LOCKED_CARDS__":
+            "".join(
+                locked_cards
+            ),
+
+        "__APP_JS__":
+            json.dumps(app),
+    }
+
+
+    for key, value in replacements.items():
+
+        template = template.replace(
+            key,
+            value
+        )
+
+
+    return _smart_expand_common(
+        template
+    )
+
+
+# SMART FLEXIBLE RULES PAGE END
 
 
 def optimizer_exclusions(app):
@@ -6924,7 +11425,51 @@ def page():
     runstat = manual_status("radarr")
     runlabel = "Idle" if not runstat["requested"] else ("%s%s · %d / %d searched" % (runstat["state"].capitalize(), (" · Searching " + runstat["current"]) if runstat.get("running") and runstat.get("current") else "", runstat["searched"], runstat["requested"]))
     actions = """<div class="controlbar primary"><form class="controlbox manualform" method="post" action="/manual-search"><input type="hidden" name="app" value="radarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="0"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-radarr" class="manualstate">%s</span></div>
-<form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="radarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", html.escape(runlabel), rule_min, rule_max, used, daily_search_budget("radarr") + extra_today, extra_today)
+<!-- SMART LIVE RULES HOVER CSS -->
+<style>
+.rules-main-button{
+    display:inline-block !important;
+    position:relative !important;
+    transition:
+        background .16s ease,
+        border-color .16s ease,
+        box-shadow .16s ease,
+        color .16s ease !important;
+}
+
+/* Radarr RULES:
+   same soft glow amount as the normal controls,
+   only the colour is Radarr red. */
+.radarr-rules-button:hover,
+.radarr-rules-button:focus-visible{
+    color:#fff !important;
+    background:rgba(255,70,55,.14) !important;
+    border-color:#ff604f !important;
+
+    box-shadow:
+        0 0 10px rgba(255,70,55,.42) !important;
+
+    filter:none !important;
+    transform:none !important;
+}
+
+/* Sonarr RULES:
+   same soft glow amount as the normal controls,
+   only the colour is Sonarr blue. */
+.sonarr-rules-button:hover,
+.sonarr-rules-button:focus-visible{
+    color:#fff !important;
+    background:rgba(35,190,255,.14) !important;
+    border-color:#32c7ff !important;
+
+    box-shadow:
+        0 0 10px rgba(35,190,255,.42) !important;
+
+    filter:none !important;
+    transform:none !important;
+}
+</style>
+<form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="radarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span><a class="badge rules-main-button radarr-rules-button" style="text-decoration:none;font-weight:900;font-size:.92rem;padding:8px 17px;letter-spacing:.07em;transition:.18s ease" href="/radarr/rules">RULES</a></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", html.escape(runlabel), rule_min, rule_max, used, daily_search_budget("radarr") + extra_today, extra_today)
     output = """<div class="sidecontent">
 <div class="metricline"><span>Downsize range</span><b>%.1f – %.1f%%</b></div>
 <div class="metricline"><span>Resolution policy</span><b>Downsize only</b></div>
@@ -15225,7 +19770,51 @@ def sonarr_page():
     elif not runstat.get("running") and runstat.get("last"):
         runlabel += "<span class='runitem'>Last searched: %s</span>" % html.escape(runstat["last"])
     son_actions = """<div class="controlbar primary"><form class="controlbox manualform" method="post" action="/manual-search"><input type="hidden" name="app" value="sonarr"><label>Manual search</label><input name="count" type="number" min="1" max="%d" value="0"><button %s>Search</button><button class="stopbtn" formaction="/stop" %s>STOP</button></form><span id="runstate-sonarr" class="manualstate">%s</span></div>
-<form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="sonarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span><span class="badge">UHD 1080→2160 exception unchanged</span></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", runlabel, rule_min, rule_max, used, daily_search_budget("sonarr") + extra_today, extra_today)
+<!-- SMART LIVE RULES HOVER CSS -->
+<style>
+.rules-main-button{
+    display:inline-block !important;
+    position:relative !important;
+    transition:
+        background .16s ease,
+        border-color .16s ease,
+        box-shadow .16s ease,
+        color .16s ease !important;
+}
+
+/* Radarr RULES:
+   same soft glow amount as the normal controls,
+   only the colour is Radarr red. */
+.radarr-rules-button:hover,
+.radarr-rules-button:focus-visible{
+    color:#fff !important;
+    background:rgba(255,70,55,.14) !important;
+    border-color:#ff604f !important;
+
+    box-shadow:
+        0 0 10px rgba(255,70,55,.42) !important;
+
+    filter:none !important;
+    transform:none !important;
+}
+
+/* Sonarr RULES:
+   same soft glow amount as the normal controls,
+   only the colour is Sonarr blue. */
+.sonarr-rules-button:hover,
+.sonarr-rules-button:focus-visible{
+    color:#fff !important;
+    background:rgba(35,190,255,.14) !important;
+    border-color:#32c7ff !important;
+
+    box-shadow:
+        0 0 10px rgba(35,190,255,.42) !important;
+
+    filter:none !important;
+    transform:none !important;
+}
+</style>
+<form class="controlbar" method="post" action="/settings"><input type="hidden" name="app" value="sonarr"><div class="controlbox"><label>Downsize</label><input name="min" type="number" min="0" max="100" step="0.1" value="%.1f"><span>–</span><input name="max" type="number" min="0" max="100" step="0.1" value="%.1f"><span>%%</span><button type="submit">Apply</button></div><span class="badge">%d/%d searches · +%d today</span><a class="badge rules-main-button sonarr-rules-button" style="text-decoration:none;font-weight:900;font-size:.92rem;padding:8px 17px;letter-spacing:.07em;transition:.18s ease" href="/sonarr/rules">RULES</a></form>""" % (MAX_MANUAL, "disabled" if runstat["running"] else "", "" if runstat["running"] else "disabled", runlabel, rule_min, rule_max, used, daily_search_budget("sonarr") + extra_today, extra_today)
     err = ("<div class='notice bad'>Sonarr API error: %s</div>" % html.escape(error)) if error else ""
     connection_status = "Online" if api_online("sonarr") else "Offline"
     return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer UI · Sonarr</title><style>%s
@@ -17693,6 +22282,38 @@ class Handler(BaseHTTPRequestHandler):
 
 
 
+        if path == "/favicon.ico":
+
+            body = _smart_asset_bytes(
+                "pixel32.png"
+            )
+
+            self.send_response(200)
+
+            self.send_header(
+                "Content-Type",
+                "image/png"
+            )
+
+            self.send_header(
+                "Content-Length",
+                str(len(body))
+            )
+
+            self.send_header(
+                "Cache-Control",
+                "public, max-age=86400"
+            )
+
+            self.end_headers()
+
+            self.wfile.write(
+                body
+            )
+
+            return
+
+
         if path == "/smart-optimizer-logo-web.png":
 
             body = _smart_asset_bytes('smart-optimizer-logo-web.png')
@@ -17899,6 +22520,10 @@ class Handler(BaseHTTPRequestHandler):
             rendered = page()
         elif path == "/sonarr":
             rendered = sonarr_page()
+        elif path == "/radarr/rules":
+            rendered = rules_page("radarr")
+        elif path == "/sonarr/rules":
+            rendered = rules_page("sonarr")
         elif path == "/settings":
             rendered = settings_page()
 
@@ -18173,6 +22798,372 @@ class Handler(BaseHTTPRequestHandler):
             )
 
             return
+
+
+
+        # SMART RULES SAVE ENDPOINT START
+        if self.path == "/rules-settings":
+
+            if not ENABLE_ACTIONS:
+                self.send_error(403)
+                return
+
+            app = (
+                form.get("app")
+                or [""]
+            )[0]
+
+            key = (
+                form.get("key")
+                or [""]
+            )[0]
+
+            enabled_raw = (
+                form.get("enabled")
+                or [""]
+            )[0]
+
+            if enabled_raw not in (
+                "0",
+                "1",
+            ):
+                self.send_error(
+                    400,
+                    "Invalid enabled value"
+                )
+                return
+
+            try:
+                update_selectable_rule(
+                    app,
+                    key,
+                    enabled_raw == "1",
+                )
+
+                enabled_count, total_count = (
+                    rules_summary(app)
+                )
+
+                result = {
+                    "ok": True,
+                    "app": app,
+                    "key": key,
+                    "value": (
+                        enabled_raw == "1"
+                    ),
+                    "enabled": enabled_count,
+                    "total": total_count,
+                }
+
+                body = json.dumps(
+                    result
+                ).encode(
+                    "utf-8"
+                )
+
+                self.send_response(200)
+
+            except Exception as exc:
+
+                body = json.dumps(
+                    {
+                        "ok": False,
+                        "error": str(exc),
+                    }
+                ).encode(
+                    "utf-8"
+                )
+
+                self.send_response(400)
+
+            self.send_header(
+                "Content-Type",
+                "application/json"
+            )
+
+            self.send_header(
+                "Content-Length",
+                str(len(body))
+            )
+
+            self.send_header(
+                "Cache-Control",
+                "no-store"
+            )
+
+            self.end_headers()
+
+            self.wfile.write(body)
+            return
+
+        # SMART RULES SAVE ENDPOINT END
+        # SMART RESOLUTION POLICY SAVE ENDPOINT START
+
+        if path == "/resolution-policy-settings":
+
+            if not ENABLE_ACTIONS:
+                self.send_error(403)
+                return
+
+            try:
+                app = (
+                    form.get("app")
+                    or [""]
+                )[0]
+
+                kind = (
+                    form.get("kind")
+                    or [""]
+                )[0]
+
+                key = (
+                    form.get("key")
+                    or [""]
+                )[0]
+
+
+                if kind == "path":
+
+                    enabled = (
+                        (
+                            form.get("enabled")
+                            or ["0"]
+                        )[0]
+                        == "1"
+                    )
+
+                    update_resolution_path(
+                        app,
+                        key,
+                        enabled
+                    )
+
+
+                elif kind == "limit":
+
+                    enabled = (
+                        (
+                            form.get("enabled")
+                            or ["0"]
+                        )[0]
+                        == "1"
+                    )
+
+                    value = (
+                        form.get("value")
+                        or [""]
+                    )[0]
+
+                    unit = (
+                        form.get("unit")
+                        or [""]
+                    )[0]
+
+                    update_resolution_limit(
+                        app,
+                        key,
+                        enabled,
+                        value,
+                        unit,
+                    )
+
+
+                elif kind == "growth":
+
+                    minimum = (
+                        form.get("min_percent")
+                        or [""]
+                    )[0]
+
+                    maximum = (
+                        form.get("max_percent")
+                        or [""]
+                    )[0]
+
+                    update_upgrade_growth(
+                        app,
+                        key,
+                        minimum,
+                        maximum,
+                    )
+
+
+                else:
+                    raise ValueError(
+                        "Unknown policy setting type"
+                    )
+
+
+                result = {
+                    "ok": True,
+                    "app": app,
+                    "policy":
+                        resolution_policy_settings(app),
+                }
+
+                body = json.dumps(
+                    result
+                ).encode("utf-8")
+
+                self.send_response(200)
+
+                self.send_header(
+                    "Content-Type",
+                    "application/json; charset=utf-8"
+                )
+
+                self.send_header(
+                    "Content-Length",
+                    str(len(body))
+                )
+
+                self.send_header(
+                    "Cache-Control",
+                    "no-store"
+                )
+
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+
+            except Exception as exc:
+
+                body = json.dumps({
+                    "ok": False,
+                    "error": str(exc),
+                }).encode("utf-8")
+
+                self.send_response(400)
+
+                self.send_header(
+                    "Content-Type",
+                    "application/json; charset=utf-8"
+                )
+
+                self.send_header(
+                    "Content-Length",
+                    str(len(body))
+                )
+
+                self.send_header(
+                    "Cache-Control",
+                    "no-store"
+                )
+
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+
+        # SMART RESOLUTION POLICY SAVE ENDPOINT END
+        # SMART ADVANCED PREFERENCES V2 SAVE ENDPOINT START
+
+        if path == "/advanced-preferences-settings":
+
+            if not ENABLE_ACTIONS:
+                self.send_error(403)
+                return
+
+            try:
+
+                app = (
+                    form.get("app")
+                    or [""]
+                )[0]
+
+                settings_raw = (
+                    form.get("settings")
+                    or ["{}"]
+                )[0]
+
+                settings = json.loads(
+                    settings_raw
+                )
+
+                update_advanced_preferences(
+                    app,
+                    settings
+                )
+
+                result = {
+                    "ok": True,
+                    "app": app,
+                    "preferences":
+                        advanced_preferences(
+                            app
+                        ),
+                }
+
+                body = json.dumps(
+                    result
+                ).encode(
+                    "utf-8"
+                )
+
+                self.send_response(200)
+
+                self.send_header(
+                    "Content-Type",
+                    "application/json; charset=utf-8"
+                )
+
+                self.send_header(
+                    "Content-Length",
+                    str(len(body))
+                )
+
+                self.send_header(
+                    "Cache-Control",
+                    "no-store"
+                )
+
+                self.end_headers()
+
+                self.wfile.write(
+                    body
+                )
+
+                return
+
+
+            except Exception as exc:
+
+                body = json.dumps({
+                    "ok": False,
+                    "error": str(exc),
+                }).encode(
+                    "utf-8"
+                )
+
+                self.send_response(400)
+
+                self.send_header(
+                    "Content-Type",
+                    "application/json; charset=utf-8"
+                )
+
+                self.send_header(
+                    "Content-Length",
+                    str(len(body))
+                )
+
+                self.send_header(
+                    "Cache-Control",
+                    "no-store"
+                )
+
+                self.end_headers()
+
+                self.wfile.write(
+                    body
+                )
+
+                return
+
+
+        # SMART ADVANCED PREFERENCES V2 SAVE ENDPOINT END
+
 
 
         if self.path == "/connection-settings":
