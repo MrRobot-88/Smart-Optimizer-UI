@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$ROOT/packaging/synology"
 OUT="${1:-$ROOT/dist}"
-VERSION="${VERSION:-2.0.4}"
+VERSION="${VERSION:-2.1.0}"
 RUNTIME_ARCHIVE="${PORTABLE_PYTHON_ARCHIVE:-}"
 
 if [ -z "$RUNTIME_ARCHIVE" ]; then
@@ -17,7 +17,7 @@ if [ ! -s "$RUNTIME_ARCHIVE" ]; then
     exit 1
 fi
 
-for FILE in     "$ROOT/smart-optimizer-ui.py"     "$ROOT/radarr-smart-optimizer.py"     "$ROOT/sonarr-smart-optimizer.py"     "$SRC/pixel128.png"
+for FILE in     "$ROOT/smart-optimizer-ui.py"     "$ROOT/radarr-smart-optimizer.py"     "$ROOT/sonarr-smart-optimizer.py"     "$SRC/pixel128.png" "$SRC/PACKAGE_ICON.PNG" "$SRC/PACKAGE_ICON_256.PNG"
 do
     if [ ! -s "$FILE" ]; then
         echo "ERROR: required file missing: $FILE"
@@ -60,7 +60,7 @@ chmod 755 "$STAGE/scripts/"*
 
 # DSM 7 expects exact 64x64 and 256x256 package icons.
 # Keep pixel128.png as the canonical source artwork and generate both required sizes.
-python3 - "$SRC/pixel128.png" "$STAGE/PACKAGE_ICON.PNG" "$STAGE/PACKAGE_ICON_256.PNG" <<'PY'
+python3 - "$SRC/pixel128.png" "$SRC/PACKAGE_ICON.PNG" "$SRC/PACKAGE_ICON_256.PNG" "$STAGE/PACKAGE_ICON.PNG" "$STAGE/PACKAGE_ICON_256.PNG" <<'PY'
 from pathlib import Path
 from PIL import Image
 import sys

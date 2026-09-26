@@ -38,13 +38,13 @@ The standalone projects remain available for users who prefer to run the engines
 
 ## Different Radarr and Sonarr policies
 
-The two optimizers intentionally do **not** use identical replacement rules.
+Radarr and Sonarr keep their own hard safety rules, while **RULES V2** adds configurable release-ranking preferences on top.
 
-**Radarr is storage-first.** Its replacements must remain inside the configured saving window. It does not inherit Sonarr's low-resolution size-growth exception. Current movie files below **5 GiB** are skipped before an interactive optimizer search.
+Both applications provide dedicated RULES pages with optional source, codec, HDR/video, audio, release and indexer preferences. Preferred indexers are ordered, but nonpreferred indexers remain valid fallbacks when no preferred candidate is suitable.
 
-**Sonarr** uses a stricter v2 selection policy. TorrentLeech is the primary valid candidate pool from each Sonarr release search; other indexers are fallback only when no valid TorrentLeech result exists. Normal 1080p optimization is storage-first: the smallest valid 1080p release wins, and HDR/Atmos do not outrank a smaller file. Existing 720p may upgrade only to 1080p and may grow by at most **40%**. Existing 1080p/2160p replacements must be strictly smaller, with an absolute **40% maximum reduction per pass**. The UHD profile requires 2160p with at least HDR and prefers DV+HDR, then HDR, then Atmos, then smaller size. AV1 and single-episode season/multi-episode packs are rejected.
+Fresh public installations start with optional preferences disabled and percentage/growth settings at 0%. Users explicitly enable the behavior they want from the RULES page.
 
-Current episode files below **400 MiB** are skipped before an interactive optimizer search. See the standalone READMEs for the detailed engine policies.
+Hard candidate-safety checks are evaluated before preference ranking, so a preference cannot make an otherwise invalid release eligible.
 
 ## Supported platforms
 
@@ -66,19 +66,19 @@ Docker or Portainer automatically selects the matching architecture.
 
 ### Native packages
 
-Starting with **v2.0.1**, the Synology DSM 7.2.1+ package is a **full offline x86_64 SPK** for Intel/AMD Synology systems that support **Container Manager**. It bundles the complete Smart Optimizer container image inside the SPK, including the current UI, Radarr engine and Sonarr engine.
+The Synology DSM 7.2.1+ package is a **native, self-contained, offline x86_64 SPK**.
 
-A fresh SPK installation therefore does **not** need to contact GitHub Container Registry or Docker Hub to obtain Smart Optimizer. DSM's official Container Manager `docker-project` resource worker preloads the bundled image from the package and then deploys the project. Configuration and optimizer state live in the package's persistent `var` directory, separate from the replaceable application image.
+It bundles the Smart Optimizer UI, Radarr optimizer, Sonarr optimizer, application assets and its own portable Python runtime. It does not require Container Manager or Docker to run.
 
-The offline SPK is architecture-specific because it contains a real `linux/amd64` container image. Its `INFO` metadata is therefore `arch="x86_64"`, which covers Synology x86_64 platform families including apollolake systems such as the DS918+. ARM NAS models should continue to use the multi-architecture GHCR image until separate offline ARM SPKs are published.
+The application runs directly from the Synology package directory while persistent configuration and optimizer state remain in the package's persistent `var` directory.
 
-GitHub releases include the versioned offline package:
+The package includes explicit 64x64 and 256x256 DSM Package Center icons and the application includes its dedicated 32x32 browser favicon.
 
-`SmartOptimizerUI-VERSION-DSM7.2.1-OFFLINE-x86_64.spk`
+ARM NAS models should use the multi-architecture container image unless a native ARM SPK is published separately.
 
-The build fails if the bundled image is missing or if the resulting SPK is implausibly small, preventing accidental publication of a bootstrap-only package.
+GitHub releases include the versioned package:
 
-Native Debian/Ubuntu `.deb`, RPM `.rpm`, QNAP `.qpkg` and other vendor-specific packages are not currently published.
+`SmartOptimizerUI-VERSION-DSM7.2.1-NATIVE-OFFLINE-x86_64.spk`
 
 ## Recommended install: Portainer Stack
 
@@ -196,7 +196,7 @@ The standalone Radarr project has its own documented defaults; do not assume eve
 
 ## Security
 
-This UI is intended for a **trusted LAN**. It does not currently provide built-in authentication. Do not expose port 8788 directly to the public internet.
+This UI is intended for a **trusted LAN**. It should still be treated as trusted-LAN software. Do not expose port 8788 directly to the public internet.
 
 API keys are secrets. Keep the persistent config directory private, do not commit it, and do not hardcode real API keys or private network addresses into public source files.
 
