@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$ROOT/packaging/synology"
 OUT="${1:-$ROOT/dist}"
-VERSION="${VERSION:-2.1.0}"
+VERSION="${VERSION:-2.1.1}"
 RUNTIME_ARCHIVE="${PORTABLE_PYTHON_ARCHIVE:-}"
 
 if [ -z "$RUNTIME_ARCHIVE" ]; then
@@ -39,6 +39,24 @@ cp -p "$ROOT/smart-optimizer-ui.py" "$STAGE/payload/app/smart-optimizer-ui.py"
 cp -p "$ROOT/radarr-smart-optimizer.py" "$STAGE/payload/app/radarr-smart-optimizer.py"
 cp -p "$ROOT/sonarr-smart-optimizer.py" "$STAGE/payload/app/sonarr-smart-optimizer.py"
 cp -a "$ROOT/assets" "$STAGE/payload/app/assets"
+
+# Public SPK builds are release packages, not the development/master UI.
+# Keep the source checkout in development mode, but disable that override
+# inside the staged package that users install from GitHub Releases.
+ADMIN_UPDATE_FRAGMENT="$STAGE/payload/app/assets/fragments/admin-update-mode.html"
+
+if [ ! -f "$ADMIN_UPDATE_FRAGMENT" ]; then
+    echo "ERROR: admin update-mode fragment missing from staged package."
+    exit 1
+fi
+
+sed -i \
+    's/const SMART_ADMIN_DEVELOPMENT_BUILD = true;/const SMART_ADMIN_DEVELOPMENT_BUILD = false;/' \
+    "$ADMIN_UPDATE_FRAGMENT"
+
+grep -q \
+    'const SMART_ADMIN_DEVELOPMENT_BUILD = false;' \
+    "$ADMIN_UPDATE_FRAGMENT"
 
 echo "Extracting bundled portable Python..."
 tar -xzf "$RUNTIME_ARCHIVE" -C "$STAGE/payload/runtime"
