@@ -28,7 +28,7 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
               VERSION="${GITHUB_REF_NAME#v}"
           else
-              VERSION="2.2.2"
+              VERSION="2.2.3"
           fi
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building Smart Optimizer UI $VERSION"
@@ -238,6 +238,10 @@ jobs:
             verify/payload/app/smart-optimizer-ui.py
 
           grep -q \
+            'data.installed !== "__CURRENT_VERSION__"' \
+            verify/payload/app/smart-optimizer-ui.py
+
+          grep -q \
             'href="/favicon.ico?v=2"' \
             verify/payload/app/smart-optimizer-ui.py
 
@@ -252,11 +256,11 @@ jobs:
             dist/SmartOptimizerUI-App-*.tar.gz
           if-no-files-found: error
 
-      - name: Publish v2.2.2 native GitHub Release
+      - name: Publish v2.2.3 native GitHub Release
         if: >
           github.event_name == 'push' &&
           github.ref == 'refs/heads/main' &&
-          contains(github.event.head_commit.message, '[release v2.2.2]')
+          contains(github.event.head_commit.message, '[release v2.2.3]')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -266,15 +270,15 @@ jobs:
           APP_BUNDLE="$(find dist -name 'SmartOptimizerUI-App-*.tar.gz' -print -quit)"
           test -n "$SPK"
           test -n "$APP_BUNDLE"
-          TAG='v2.2.2'
+          TAG='v2.2.3'
 
           if gh release view "$TAG" >/dev/null 2>&1; then
               gh release upload "$TAG" "$SPK" "$APP_BUNDLE" --clobber
           else
               gh release create "$TAG" "$SPK" "$APP_BUNDLE" \
                 --target "$GITHUB_SHA" \
-                --title 'Smart Optimizer UI v2.2.2' \
-                --notes-file RELEASE-NOTES-v2.2.2.md
+                --title 'Smart Optimizer UI v2.2.3' \
+                --notes-file RELEASE-NOTES-v2.2.3.md
           fi
 
       - name: Attach native SPK to tag release
