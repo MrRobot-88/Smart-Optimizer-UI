@@ -78,6 +78,12 @@ UPDATE_RELEASE_API = (
     + "/releases/latest"
 )
 
+UPDATE_MANIFEST_URL = (
+    "https://github.com/"
+    + UPDATE_REPOSITORY
+    + "/releases/latest/download/SmartOptimizerUI-update.json"
+)
+
 SMART_OPTIMIZER_PACKAGE_VAR = (
     str(
         os.environ.get(
@@ -16790,6 +16796,133 @@ def latest_update_release(
             return dict(cached)
 
 
+        raw = None
+        manifest_error = None
+
+        manifest_request = urllib.request.Request(
+            UPDATE_MANIFEST_URL,
+            headers={
+                "Accept":
+                    "application/json",
+
+                "User-Agent":
+                    "Smart-Optimizer-UI/%s"
+                    % SMART_OPTIMIZER_VERSION,
+            }
+        )
+
+        try:
+
+            with urllib.request.urlopen(
+                manifest_request,
+                timeout=20
+            ) as response:
+
+                raw = json.loads(
+                    response.read().decode(
+                        "utf-8"
+                    )
+                )
+
+            if not isinstance(
+                raw,
+                dict
+            ):
+                raise RuntimeError(
+                    "Update manifest is invalid."
+                )
+
+            release = {
+                "tag":
+                    str(
+                        raw.get(
+                            "tag"
+                        )
+                        or ""
+                    ),
+
+                "version":
+                    str(
+                        raw.get(
+                            "version"
+                        )
+                        or ""
+                    ),
+
+                "name":
+                    str(
+                        raw.get(
+                            "name"
+                        )
+                        or "Latest release"
+                    ),
+
+                "notes":
+                    str(
+                        raw.get(
+                            "notes"
+                        )
+                        or ""
+                    ),
+
+                "published_at":
+                    str(
+                        raw.get(
+                            "published_at"
+                        )
+                        or ""
+                    ),
+
+                "html_url":
+                    str(
+                        raw.get(
+                            "html_url"
+                        )
+                        or ""
+                    ),
+
+                "asset":
+                    (
+                        raw.get(
+                            "app_asset"
+                        )
+                        if SMART_SELF_UPDATE_MODE == "app-bundle"
+                        else raw.get(
+                            "spk_asset"
+                        )
+                    ),
+            }
+
+            if (
+                not release["version"]
+                or not isinstance(
+                    release["asset"],
+                    dict
+                )
+            ):
+                raise RuntimeError(
+                    "Update manifest is incomplete."
+                )
+
+            UPDATE_CACHE[
+                "loaded"
+            ] = now
+
+            UPDATE_CACHE[
+                "release"
+            ] = dict(
+                release
+            )
+
+            return release
+
+        except Exception as exc:
+
+            manifest_error = str(
+                exc
+            )
+
+
         request = urllib.request.Request(
             UPDATE_RELEASE_API,
             headers={
@@ -16803,14 +16936,31 @@ def latest_update_release(
         )
 
 
-        with urllib.request.urlopen(
-            request,
-            timeout=20
-        ) as response:
+        try:
 
-            raw = json.loads(
-                response.read().decode(
-                    "utf-8"
+            with urllib.request.urlopen(
+                request,
+                timeout=20
+            ) as response:
+
+                raw = json.loads(
+                    response.read().decode(
+                        "utf-8"
+                    )
+                )
+
+        except Exception as exc:
+
+            if cached:
+                return dict(
+                    cached
+                )
+
+            raise RuntimeError(
+                "Could not check for updates. Manifest: %s; GitHub API: %s"
+                % (
+                    manifest_error,
+                    exc,
                 )
             )
 
@@ -17114,24 +17264,28 @@ def download_latest_update():
         ).strip().lower()
 
 
-        if expected_digest.startswith(
+        if not expected_digest.startswith(
             "sha256:"
         ):
-
-            expected_sha = (
-                expected_digest.split(
-                    ":",
-                    1
-                )[1]
-                .strip()
+            raise RuntimeError(
+                "Release asset has no trusted SHA-256 digest."
             )
 
 
-            if actual_sha.lower() != expected_sha:
+        expected_sha = (
+            expected_digest.split(
+                ":",
+                1
+            )[1]
+            .strip()
+        )
 
-                raise RuntimeError(
-                    "Downloaded SPK failed SHA-256 verification."
-                )
+
+        if actual_sha.lower() != expected_sha:
+
+            raise RuntimeError(
+                "Downloaded update failed SHA-256 verification."
+            )
 
 
         os.replace(
@@ -17615,7 +17769,19 @@ def updates_page(
     )
 
 
-    if (
+    if release_error:
+
+        update_action = (
+            "<button "
+            "id='updateButton' "
+            "class='update-btn' "
+            "type='button' "
+            "disabled>"
+            "Unavailable"
+            "</button>"
+        )
+
+    elif (
         SMART_SELF_UPDATE_MODE == "app-bundle"
         and runtime_state
         in (
