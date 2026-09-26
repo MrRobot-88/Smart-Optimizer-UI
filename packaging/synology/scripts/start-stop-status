@@ -56,13 +56,14 @@ start_service() {
     export SMART_UI_ASSET_DIR="$TARGET/app/assets"
 
     export SMART_OPTIMIZER_NATIVE_SPK="1"
-    export SMART_OPTIMIZER_PACKAGE_VERSION="${SYNOPKG_PKGVER:-2.2.1}"
-    export SMART_OPTIMIZER_VERSION="${SYNOPKG_PKGVER:-2.2.1}"
+    export SMART_OPTIMIZER_PACKAGE_VERSION="${SYNOPKG_PKGVER:-2.2.2}"
+    export SMART_OPTIMIZER_VERSION="${SYNOPKG_PKGVER:-2.2.2}"
 
     export SMART_OPTIMIZER_PACKAGE_TARGET="$TARGET"
     export SMART_OPTIMIZER_PACKAGE_VAR="$VAR"
     export SMART_OPTIMIZER_SELF_UPDATE_MODE="app-bundle"
     export SMART_OPTIMIZER_APP_UPDATE_REQUEST="$VAR/updates/app-update-request.json"
+    export SMART_OPTIMIZER_UPDATE_DIR="$VAR/updates"
 
     mkdir -p "$VAR/app/releases" "$VAR/updates"
 
