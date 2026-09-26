@@ -416,6 +416,12 @@ def child_environment(
     )
 
     env[
+        "SMART_OPTIMIZER_UPDATE_DIR"
+    ] = str(
+        UPDATES
+    )
+
+    env[
         "SMART_OPTIMIZER_PACKAGE_TARGET"
     ] = str(
         TARGET
