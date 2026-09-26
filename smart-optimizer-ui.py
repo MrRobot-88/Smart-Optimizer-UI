@@ -18519,6 +18519,8 @@ body.updatebody{
                 data.target_version
                 &&
                 data.installed === data.target_version
+                &&
+                data.installed !== "__CURRENT_VERSION__"
             ){
 
                 window.setTimeout(
