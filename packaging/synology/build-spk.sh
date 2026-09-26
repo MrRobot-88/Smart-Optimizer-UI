@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$ROOT/packaging/synology"
 OUT="${1:-$ROOT/dist}"
-VERSION="${VERSION:-2.2.0}"
+VERSION="${VERSION:-2.2.1}"
 RUNTIME_ARCHIVE="${PORTABLE_PYTHON_ARCHIVE:-}"
 
 if [ -z "$RUNTIME_ARCHIVE" ]; then
