@@ -28,7 +28,7 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
               VERSION="${GITHUB_REF_NAME#v}"
           else
-              VERSION="2.1.1"
+              VERSION="2.1.2"
           fi
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building Smart Optimizer UI $VERSION"
@@ -98,6 +98,22 @@ jobs:
             'const SMART_ADMIN_DEVELOPMENT_BUILD = false;' \
             verify/payload/app/assets/fragments/admin-update-mode.html
 
+          grep -q \
+            'def verified_update_file():' \
+            verify/payload/app/smart-optimizer-ui.py
+
+          grep -q \
+            '/update-package-file' \
+            verify/payload/app/smart-optimizer-ui.py
+
+          if grep -q \
+            'The updater will continue automatically.' \
+            verify/payload/app/smart-optimizer-ui.py
+          then
+              echo "ERROR: packaged UI still claims automatic self-installation."
+              exit 1
+          fi
+
           if grep -q \
             'const SMART_ADMIN_DEVELOPMENT_BUILD = true;' \
             verify/payload/app/assets/fragments/admin-update-mode.html
@@ -139,11 +155,11 @@ jobs:
           path: dist/*.spk
           if-no-files-found: error
 
-      - name: Publish v2.1.1 native GitHub Release
+      - name: Publish v2.1.2 native GitHub Release
         if: >
           github.event_name == 'push' &&
           github.ref == 'refs/heads/main' &&
-          contains(github.event.head_commit.message, '[release v2.1.1]')
+          contains(github.event.head_commit.message, '[release v2.1.2]')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -151,15 +167,15 @@ jobs:
           set -euo pipefail
           SPK="$(find dist -name '*.spk' -print -quit)"
           test -n "$SPK"
-          TAG='v2.1.1'
+          TAG='v2.1.2'
 
           if gh release view "$TAG" >/dev/null 2>&1; then
               gh release upload "$TAG" "$SPK" --clobber
           else
               gh release create "$TAG" "$SPK" \
                 --target "$GITHUB_SHA" \
-                --title 'Smart Optimizer UI v2.1.1' \
-                --notes-file RELEASE-NOTES-v2.1.1.md
+                --title 'Smart Optimizer UI v2.1.2' \
+                --notes-file RELEASE-NOTES-v2.1.2.md
           fi
 
       - name: Attach native SPK to tag release
