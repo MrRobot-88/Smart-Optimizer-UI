@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="$ROOT/packaging/synology"
 OUT="${1:-$ROOT/dist}"
-VERSION="${VERSION:-2.1.2}"
+VERSION="${VERSION:-2.2.0}"
 RUNTIME_ARCHIVE="${PORTABLE_PYTHON_ARCHIVE:-}"
 
 if [ -z "$RUNTIME_ARCHIVE" ]; then
@@ -17,7 +17,7 @@ if [ ! -s "$RUNTIME_ARCHIVE" ]; then
     exit 1
 fi
 
-for FILE in     "$ROOT/smart-optimizer-ui.py"     "$ROOT/radarr-smart-optimizer.py"     "$ROOT/sonarr-smart-optimizer.py"     "$SRC/pixel128.png" "$SRC/PACKAGE_ICON.PNG" "$SRC/PACKAGE_ICON_256.PNG"
+for FILE in     "$ROOT/smart-optimizer-ui.py"     "$ROOT/radarr-smart-optimizer.py"     "$ROOT/sonarr-smart-optimizer.py"     "$SRC/smart-optimizer-supervisor.py"     "$SRC/pixel128.png" "$SRC/PACKAGE_ICON.PNG" "$SRC/PACKAGE_ICON_256.PNG"
 do
     if [ ! -s "$FILE" ]; then
         echo "ERROR: required file missing: $FILE"
@@ -39,6 +39,7 @@ cp -p "$ROOT/smart-optimizer-ui.py" "$STAGE/payload/app/smart-optimizer-ui.py"
 cp -p "$ROOT/radarr-smart-optimizer.py" "$STAGE/payload/app/radarr-smart-optimizer.py"
 cp -p "$ROOT/sonarr-smart-optimizer.py" "$STAGE/payload/app/sonarr-smart-optimizer.py"
 cp -a "$ROOT/assets" "$STAGE/payload/app/assets"
+cp -p "$SRC/smart-optimizer-supervisor.py" "$STAGE/payload/smart-optimizer-supervisor.py"
 
 # Public SPK builds are release packages, not the development/master UI.
 # Keep the source checkout in development mode, but disable that override
@@ -70,7 +71,7 @@ fi
 
 "$PYTHON" -c 'import hashlib, http.server, json, ssl, subprocess, threading, urllib.request; print("Bundled Python runtime OK")'
 
-"$PYTHON" -m py_compile     "$STAGE/payload/app/smart-optimizer-ui.py"     "$STAGE/payload/app/radarr-smart-optimizer.py"     "$STAGE/payload/app/sonarr-smart-optimizer.py"
+"$PYTHON" -m py_compile     "$STAGE/payload/app/smart-optimizer-ui.py"     "$STAGE/payload/app/radarr-smart-optimizer.py"     "$STAGE/payload/app/sonarr-smart-optimizer.py"     "$STAGE/payload/smart-optimizer-supervisor.py"
 
 find "$STAGE/payload/app" -type d -name __pycache__ -prune -exec rm -rf {} +
 

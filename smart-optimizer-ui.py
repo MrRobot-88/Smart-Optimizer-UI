@@ -98,6 +98,26 @@ UPDATE_STATUS_FILE = os.path.join(
     "status.json"
 )
 
+SMART_SELF_UPDATE_MODE = (
+    str(
+        os.environ.get(
+            "SMART_OPTIMIZER_SELF_UPDATE_MODE",
+            ""
+        )
+        or ""
+    )
+    .strip()
+    .lower()
+)
+
+APP_UPDATE_REQUEST_FILE = os.environ.get(
+    "SMART_OPTIMIZER_APP_UPDATE_REQUEST",
+    os.path.join(
+        UPDATE_DIR,
+        "app-update-request.json"
+    )
+)
+
 UPDATE_LOCK = threading.Lock()
 
 UPDATE_CACHE = {
@@ -16803,26 +16823,61 @@ def latest_update_release(
         ]
 
 
-        # Prefer the future complete offline package.
-        offline = [
+        app_assets = [
             asset
-            for asset in spk_assets
-            if "offline" in str(
-                asset.get("name")
-                or ""
-            ).lower()
+            for asset in assets
+            if (
+                str(
+                    asset.get("name")
+                    or ""
+                )
+                .lower()
+                .startswith(
+                    "smartoptimizerui-app-"
+                )
+                and str(
+                    asset.get("name")
+                    or ""
+                )
+                .lower()
+                .endswith(
+                    ".tar.gz"
+                )
+            )
         ]
 
 
-        chosen = (
-            offline[0]
-            if offline
-            else (
-                spk_assets[0]
-                if spk_assets
+        # Supervised SPK installs update only the writable app payload.
+        # Legacy/non-supervised installs keep the verified SPK flow.
+        if SMART_SELF_UPDATE_MODE == "app-bundle":
+
+            chosen = (
+                app_assets[0]
+                if app_assets
                 else None
             )
-        )
+
+        else:
+
+            offline = [
+                asset
+                for asset in spk_assets
+                if "offline" in str(
+                    asset.get("name")
+                    or ""
+                ).lower()
+            ]
+
+
+            chosen = (
+                offline[0]
+                if offline
+                else (
+                    spk_assets[0]
+                    if spk_assets
+                    else None
+                )
+            )
 
 
         tag = str(
@@ -16892,7 +16947,11 @@ def download_latest_update():
 
     if not asset:
         raise RuntimeError(
-            "The latest GitHub release has no SPK package."
+            (
+                "The latest GitHub release has no application update bundle."
+                if SMART_SELF_UPDATE_MODE == "app-bundle"
+                else "The latest GitHub release has no SPK package."
+            )
         )
 
 
@@ -16912,15 +16971,45 @@ def download_latest_update():
     )
 
 
-    if (
-        not asset_url
-        or not filename
-        or not filename.lower().endswith(
-            ".spk"
+    if SMART_SELF_UPDATE_MODE == "app-bundle":
+
+        valid_asset = (
+            bool(
+                asset_url
+                and filename
+            )
+            and filename.lower().startswith(
+                "smartoptimizerui-app-"
+            )
+            and filename.lower().endswith(
+                ".tar.gz"
+            )
         )
-    ):
-        raise RuntimeError(
+
+        invalid_message = (
+            "Invalid application update asset."
+        )
+
+    else:
+
+        valid_asset = (
+            bool(
+                asset_url
+                and filename
+            )
+            and filename.lower().endswith(
+                ".spk"
+            )
+        )
+
+        invalid_message = (
             "Invalid SPK release asset."
+        )
+
+
+    if not valid_asset:
+        raise RuntimeError(
+            invalid_message
         )
 
 
@@ -17050,33 +17139,96 @@ def download_latest_update():
     )
 
 
-    status = {
-        "state": "ready",
+    if SMART_SELF_UPDATE_MODE == "app-bundle":
 
-        "message":
-            "Verified SPK ready for manual installation.",
+        status = {
+            "state": "queued",
 
-        "current_version":
-            SMART_OPTIMIZER_VERSION,
+            "message":
+                "Update verified. Smart Optimizer will restart automatically.",
 
-        "target_version":
-            version,
+            "current_version":
+                SMART_OPTIMIZER_VERSION,
 
-        "filename":
-            filename,
+            "target_version":
+                version,
 
-        "sha256":
-            actual_sha,
+            "filename":
+                filename,
 
-        "updated_at":
-            int(time.time()),
-    }
+            "sha256":
+                actual_sha,
+
+            "updated_at":
+                int(time.time()),
+        }
 
 
-    _update_json_write(
-        UPDATE_STATUS_FILE,
-        status
-    )
+        _update_json_write(
+            UPDATE_STATUS_FILE,
+            status
+        )
+
+
+        _update_json_write(
+            APP_UPDATE_REQUEST_FILE,
+            {
+                "action":
+                    "install-app-bundle",
+
+                "current_version":
+                    SMART_OPTIMIZER_VERSION,
+
+                "target_version":
+                    version,
+
+                "filename":
+                    filename,
+
+                "bundle_path":
+                    final_path,
+
+                "sha256":
+                    actual_sha,
+
+                # Give the HTTP response time to reach the browser.
+                "not_before":
+                    int(time.time()) + 5,
+
+                "requested_at":
+                    int(time.time()),
+            }
+        )
+
+    else:
+
+        status = {
+            "state": "ready",
+
+            "message":
+                "Verified SPK ready for manual installation.",
+
+            "current_version":
+                SMART_OPTIMIZER_VERSION,
+
+            "target_version":
+                version,
+
+            "filename":
+                filename,
+
+            "sha256":
+                actual_sha,
+
+            "updated_at":
+                int(time.time()),
+        }
+
+
+        _update_json_write(
+            UPDATE_STATUS_FILE,
+            status
+        )
 
 
     return {
@@ -17337,7 +17489,7 @@ def updates_page(
         asset.get(
             "name"
         )
-        or "No SPK asset"
+        or "No update asset"
     )
 
 
@@ -17379,21 +17531,23 @@ def updates_page(
 
     prepared_update = False
 
-    try:
-        (
-            _prepared_name,
-            _prepared_path,
-            _prepared_version,
-        ) = verified_update_file()
+    if SMART_SELF_UPDATE_MODE != "app-bundle":
 
-        prepared_update = bool(
-            latest_version
-            and _prepared_version
-            == latest_version
-        )
+        try:
+            (
+                _prepared_name,
+                _prepared_path,
+                _prepared_version,
+            ) = verified_update_file()
 
-    except Exception:
-        prepared_update = False
+            prepared_update = bool(
+                latest_version
+                and _prepared_version
+                == latest_version
+            )
+
+        except Exception:
+            prepared_update = False
 
 
     notice = ""
@@ -17442,7 +17596,24 @@ def updates_page(
     )
 
 
-    if prepared_update:
+    if SMART_SELF_UPDATE_MODE == "app-bundle":
+
+        update_action = (
+            "<form "
+            "id='updateForm' "
+            "method='post' "
+            "action='/update-download'>"
+            "<button "
+            "id='updateButton' "
+            "class='update-btn' "
+            "type='submit'%s>"
+            "Update now"
+            "</button>"
+            "</form>"
+            % download_disabled
+        )
+
+    elif prepared_update:
 
         update_action = (
             "<a "
@@ -18166,12 +18337,7 @@ body.updatebody{
             </h2>
 
             <p>
-                Prepare and verify the latest SPK release.
-                DSM 7 runs third-party packages without root privileges,
-                so GitHub-installed builds cannot silently replace their
-                own package. Download the verified SPK here, then install
-                it over the current version using Package Center &gt;
-                Manual Install. Your saved settings are preserved.
+                __UPDATE_EXPLANATION__
             </p>
 
         </div>
@@ -18227,7 +18393,11 @@ body.updatebody{
                 button.disabled = true;
 
                 button.textContent =
-                    "Downloading…";
+                    (
+                        "__SELF_UPDATE_MODE__" === "app-bundle"
+                        ? "Updating…"
+                        : "Downloading…"
+                    );
 
             }
         );
@@ -18282,6 +18452,29 @@ body.updatebody{
                 message.textContent =
                     data.message
                     || "";
+
+            }
+
+
+            if(
+                "__SELF_UPDATE_MODE__" === "app-bundle"
+                &&
+                data.state === "updated"
+                &&
+                data.installed
+                &&
+                data.target_version
+                &&
+                data.installed === data.target_version
+            ){
+
+                window.setTimeout(
+                    function(){
+                        window.location.href =
+                            "/updates?refresh=1";
+                    },
+                    900
+                );
 
             }
 
@@ -18359,6 +18552,20 @@ body.updatebody{
         "__RELEASE_NOTES__":
             notes_html,
 
+        "__UPDATE_EXPLANATION__":
+            (
+                "Download, verify, install, and restart automatically. "
+                "The Synology package stays in place while the writable "
+                "Smart Optimizer application payload is updated, similar "
+                "to the in-app updater model used by Radarr."
+                if SMART_SELF_UPDATE_MODE == "app-bundle"
+                else
+                "Prepare and verify the latest SPK release. "
+                "Download the verified SPK here, then install it over "
+                "the current version using DSM Package Center > "
+                "Manual Install. Your saved settings are preserved."
+            ),
+
         "__ASSET_NAME__":
             html.escape(
                 asset_name
@@ -18371,6 +18578,11 @@ body.updatebody{
 
         "__DOWNLOAD_DISABLED__":
             download_disabled,
+
+        "__SELF_UPDATE_MODE__":
+            html.escape(
+                SMART_SELF_UPDATE_MODE
+            ),
 
         "__UPDATE_ACTION__":
             update_action,
@@ -22890,15 +23102,28 @@ class Handler(BaseHTTPRequestHandler):
                 )
 
 
-                rendered = updates_page(
-                    (
-                        "Smart Optimizer v%s downloaded "
-                        "and SHA-256 verified. "
-                        "Use Download verified SPK below, then install "
-                        "it over the current version in DSM Package Center "
-                        "> Manual Install."
+                if SMART_SELF_UPDATE_MODE == "app-bundle":
+
+                    update_message = (
+                        "Smart Optimizer v%s downloaded and SHA-256 "
+                        "verified. Installing automatically; the web UI "
+                        "will restart briefly."
+                        % target
                     )
-                    % target
+
+                else:
+
+                    update_message = (
+                        "Smart Optimizer v%s downloaded and SHA-256 "
+                        "verified. Use Download verified SPK below, then "
+                        "install it over the current version in DSM "
+                        "Package Center > Manual Install."
+                        % target
+                    )
+
+
+                rendered = updates_page(
+                    update_message
                 )
 
 

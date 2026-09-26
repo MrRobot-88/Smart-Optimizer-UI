@@ -28,7 +28,7 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
               VERSION="${GITHUB_REF_NAME#v}"
           else
-              VERSION="2.1.2"
+              VERSION="2.2.0"
           fi
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building Smart Optimizer UI $VERSION"
@@ -46,6 +46,77 @@ jobs:
           URL='https://github.com/astral-sh/python-build-standalone/releases/download/20260924/cpython-3.12.14%2B20260924-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz'
           curl -fL --retry 4 --retry-delay 3 "$URL" -o portable-python.tar.gz
           echo '269b2c99e4db15b242bf01832f4fea1e8f1a664f273cff519393f296e9820b41  portable-python.tar.gz' | sha256sum -c -
+
+      - name: Build application update bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION='${{ steps.version.outputs.value }}'
+
+          rm -rf app-bundle-stage
+          mkdir -p app-bundle-stage/app dist
+
+          cp -p smart-optimizer-ui.py app-bundle-stage/app/
+          cp -p radarr-smart-optimizer.py app-bundle-stage/app/
+          cp -p sonarr-smart-optimizer.py app-bundle-stage/app/
+          cp -a assets app-bundle-stage/app/assets
+
+          sed -i \
+            's/const SMART_ADMIN_DEVELOPMENT_BUILD = true;/const SMART_ADMIN_DEVELOPMENT_BUILD = false;/' \
+            app-bundle-stage/app/assets/fragments/admin-update-mode.html
+
+          grep -q \
+            'const SMART_ADMIN_DEVELOPMENT_BUILD = false;' \
+            app-bundle-stage/app/assets/fragments/admin-update-mode.html
+
+          python3 -m py_compile \
+            app-bundle-stage/app/smart-optimizer-ui.py \
+            app-bundle-stage/app/radarr-smart-optimizer.py \
+            app-bundle-stage/app/sonarr-smart-optimizer.py
+
+          find app-bundle-stage -type d -name __pycache__ -prune -exec rm -rf {} +
+
+          tar -C app-bundle-stage -czf \
+            "dist/SmartOptimizerUI-App-${VERSION}.tar.gz" \
+            app
+
+      - name: Validate application update bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION='${{ steps.version.outputs.value }}'
+          BUNDLE="dist/SmartOptimizerUI-App-${VERSION}.tar.gz"
+
+          test -s "$BUNDLE"
+
+          rm -rf verify-app
+          mkdir verify-app
+          tar -xzf "$BUNDLE" -C verify-app
+
+          test -f verify-app/app/smart-optimizer-ui.py
+          test -f verify-app/app/radarr-smart-optimizer.py
+          test -f verify-app/app/sonarr-smart-optimizer.py
+          test -d verify-app/app/assets
+
+          grep -q \
+            'const SMART_ADMIN_DEVELOPMENT_BUILD = false;' \
+            verify-app/app/assets/fragments/admin-update-mode.html
+
+          if find verify-app/app \
+            \( -name 'smart-optimizer-control.json' \
+               -o -name 'smart-optimizer-connections.json' \
+               -o -name 'smart-optimizer-auth.json' \
+               -o -name '*state*.json' \) \
+            -print | grep -q .
+          then
+              echo "ERROR: private runtime/config file found in app update bundle."
+              exit 1
+          fi
+
+          python3 -m py_compile \
+            verify-app/app/smart-optimizer-ui.py \
+            verify-app/app/radarr-smart-optimizer.py \
+            verify-app/app/sonarr-smart-optimizer.py
 
       - name: Build native offline SPK
         shell: bash
@@ -79,6 +150,7 @@ jobs:
           tar -xzf verify/package.tgz -C verify/payload
 
           test -x verify/payload/runtime/python/bin/python3
+          test -f verify/payload/smart-optimizer-supervisor.py
           test -f verify/payload/app/smart-optimizer-ui.py
           test -f verify/payload/app/radarr-smart-optimizer.py
           test -f verify/payload/app/sonarr-smart-optimizer.py
@@ -146,36 +218,47 @@ jobs:
               print(f"{name}: {width}x{height} OK")
           PY
 
+          verify/payload/runtime/python/bin/python3 -m py_compile \
+            verify/payload/smart-optimizer-supervisor.py
+
+          grep -q \
+            'SMART_OPTIMIZER_SELF_UPDATE_MODE="app-bundle"' \
+            verify/scripts/start-stop-status
+
           verify/payload/runtime/python/bin/python3 -c 'import ssl, urllib.request, http.server; print("Native runtime validation OK")'
 
-      - name: Upload native SPK artifact
+      - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: SmartOptimizerUI-${{ steps.version.outputs.value }}-NATIVE-OFFLINE-x86_64
-          path: dist/*.spk
+          name: SmartOptimizerUI-${{ steps.version.outputs.value }}-release-assets
+          path: |
+            dist/*.spk
+            dist/SmartOptimizerUI-App-*.tar.gz
           if-no-files-found: error
 
-      - name: Publish v2.1.2 native GitHub Release
+      - name: Publish v2.2.0 native GitHub Release
         if: >
           github.event_name == 'push' &&
           github.ref == 'refs/heads/main' &&
-          contains(github.event.head_commit.message, '[release v2.1.2]')
+          contains(github.event.head_commit.message, '[release v2.2.0]')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           SPK="$(find dist -name '*.spk' -print -quit)"
+          APP_BUNDLE="$(find dist -name 'SmartOptimizerUI-App-*.tar.gz' -print -quit)"
           test -n "$SPK"
-          TAG='v2.1.2'
+          test -n "$APP_BUNDLE"
+          TAG='v2.2.0'
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-              gh release upload "$TAG" "$SPK" --clobber
+              gh release upload "$TAG" "$SPK" "$APP_BUNDLE" --clobber
           else
-              gh release create "$TAG" "$SPK" \
+              gh release create "$TAG" "$SPK" "$APP_BUNDLE" \
                 --target "$GITHUB_SHA" \
-                --title 'Smart Optimizer UI v2.1.2' \
-                --notes-file RELEASE-NOTES-v2.1.2.md
+                --title 'Smart Optimizer UI v2.2.0' \
+                --notes-file RELEASE-NOTES-v2.2.0.md
           fi
 
       - name: Attach native SPK to tag release
@@ -186,5 +269,7 @@ jobs:
         run: |
           set -euo pipefail
           SPK="$(find dist -name '*.spk' -print -quit)"
+          APP_BUNDLE="$(find dist -name 'SmartOptimizerUI-App-*.tar.gz' -print -quit)"
           test -n "$SPK"
-          gh release upload "$GITHUB_REF_NAME" "$SPK" --clobber
+          test -n "$APP_BUNDLE"
+          gh release upload "$GITHUB_REF_NAME" "$SPK" "$APP_BUNDLE" --clobber
