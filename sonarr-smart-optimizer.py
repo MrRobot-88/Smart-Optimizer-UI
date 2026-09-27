@@ -3975,13 +3975,25 @@ def choose_best(item, releases, state):
 
     else:
 
-        # SMART SONARR NORMAL RANKING V2B
+        # SMART SONARR NORMAL RANKING V2C
         #
         # Normal 720/1080 ranking deliberately does NOT add
         # HDR/Atmos priority. Those remain UHD-specific here.
+        #
+        # STORAGE-FIRST:
+        # File size is unconditional priority #1 after all
+        # evaluate_release() safety/eligibility checks pass.
 
         pool.sort(
             key=lambda x: (
+
+                # PRIORITY #1 - STORAGE SIZE
+                float(
+                    x.get(
+                        "size_mib"
+                    )
+                    or 0
+                ),
 
                 sonarr_v2_indexer_rank(
                     x,
@@ -4054,19 +4066,6 @@ def choose_best(item, releases, state):
                     sonarr_v2_is_freeleech(
                         x
                     )
-                ),
-
-                (
-                    float(
-                        x.get(
-                            "size_mib"
-                        )
-                        or 0
-                    )
-                    if preferences.get(
-                        "prefer_smaller"
-                    )
-                    else 0
                 ),
 
                 sonarr_v2_codec_rank(
