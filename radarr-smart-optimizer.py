@@ -31,6 +31,138 @@ from datetime import datetime, timezone
 # Set RADARR_KEY in your environment or use a protected wrapper/key file.
 # Check the URL if Radarr is not on the same machine, then review
 # SEARCHES_PER_RUN plus NORMAL_PROFILE_ID and UHD_PROFILE_ID below.
+
+# ============================================================
+# RADARR FUTURE ONLY
+# RADARR_FUTURE_ONLY_EXISTING_LIBRARY_V1
+# ============================================================
+
+def _smart_optimizer_radarr_future_only():
+    """
+    Default fail-safe is ON.
+
+    The persisted Smart Optimizer rule may explicitly disable it.
+    """
+
+    import json as _json
+    import os as _os
+
+    paths = []
+
+    env_path = str(
+        _os.environ.get(
+            "SMART_OPTIMIZER_CONTROL",
+            ""
+        )
+        or ""
+    ).strip()
+
+    if env_path:
+        paths.append(
+            env_path
+        )
+
+    paths.extend([
+        "/config/smart-optimizer-control.json",
+        "/volume1/WDBLACK/ContainerConfigs/Smart-Optimizer-UI/smart-optimizer-control.json",
+    ])
+
+
+    for path in paths:
+
+        try:
+
+            if not _os.path.isfile(
+                path
+            ):
+                continue
+
+            with open(
+                path,
+                "r",
+                encoding="utf-8",
+            ) as f:
+
+                data = _json.load(
+                    f
+                )
+
+
+            rules = (
+                (
+                    data.get(
+                        "radarr"
+                    )
+                    or {}
+                ).get(
+                    "rules"
+                )
+                or {}
+            )
+
+
+            return bool(
+                rules.get(
+                    "future_only_existing_library",
+                    True,
+                )
+            )
+
+        except Exception:
+            continue
+
+
+    # Fail-safe:
+    # never start a whole existing-library pass merely
+    # because the control file was temporarily unavailable.
+    return True
+
+
+if _smart_optimizer_radarr_future_only():
+
+    import os as _future_os
+
+
+    _explicit_movie = str(
+        _future_os.environ.get(
+            "SMART_OPTIMIZER_MOVIE_ID",
+            ""
+        )
+        or ""
+    ).strip()
+
+
+    _manual_target = str(
+        _future_os.environ.get(
+            "SMART_OPTIMIZER_MANUAL_TARGET",
+            ""
+        )
+        or ""
+    ).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+    if (
+        not _explicit_movie
+        and not _manual_target
+    ):
+
+        print(
+            "RADARR FUTURE-ONLY MODE: "
+            "automatic existing-library optimizer blocked."
+        )
+
+        raise SystemExit(0)
+
+
+# ============================================================
+# RADARR FUTURE ONLY END
+# ============================================================
+
 RADARR_URL_DEFAULT = "http://127.0.0.1:7878"
 SEARCHES_PER_RUN = 10
 

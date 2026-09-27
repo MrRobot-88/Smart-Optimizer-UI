@@ -1888,60 +1888,46 @@ def mark_episode_searched(state, episode_id):
 
 
 def auto_processed_series_ids(state):
-    return {
-        int(x)
-        for x in state.get("auto_processed_series_ids", [])
-        if str(x).isdigit()
-    }
+    """
+    TV series are never permanently closed.
+
+    Episode-level search history remains the one-pass gate.
+    A future episode receives a new Sonarr episode ID and
+    therefore remains eligible on the next A-Z library cycle.
+    """
+    return set()
 
 
 def mark_series_auto_processed(state, series_id):
-    processed = auto_processed_series_ids(state)
-    processed.add(int(series_id))
-    state["auto_processed_series_ids"] = sorted(processed)
+    """
+    Disabled for Sonarr.
+
+    A TV series may receive future episodes and must not be
+    permanently removed from automatic optimization.
+    """
+    return None
 
 
 def reconcile_auto_processed_series(state):
-    """Migrate/close every fully consumed automatic series exactly once."""
-    sq = state.get("series_queue", []) or []
-    sc = min(int(state.get("series_cursor", 0)), len(sq))
-    wq = state.get("work_queue", []) or []
-    wc = min(int(state.get("work_cursor", 0)), len(wq))
+    """
+    Sonarr uses recurring library cycles.
 
-    loaded = {
-        int(x.get("series_id", 0) or 0)
-        for x in sq[:sc]
-        if int(x.get("series_id", 0) or 0) > 0
-    }
-    unconsumed = {
-        int(x.get("series_id", 0) or 0)
-        for x in wq[wc:]
-        if int(x.get("series_id", 0) or 0) > 0
-    }
-
-    processed = auto_processed_series_ids(state)
-    before = set(processed)
-
-    rule_skipped = {
-        int(x)
-        for x in state.get(
-            "rule_skipped_series_ids",
-            []
-        )
-        if str(x).isdigit()
-    }
-
-    processed.update(
-        (loaded - unconsumed)
-        - rule_skipped
+    Clear legacy series-level one-shot state while preserving
+    episode-level search history.
+    """
+    stale = (
+        state.get("auto_processed_series_ids")
+        or []
     )
-    state["auto_processed_series_ids"] = sorted(processed)
 
-    if LIVE and processed != before:
-        save_state(state)
+    if stale:
+        state["auto_processed_series_ids"] = []
+
+        if LIVE:
+            save_state(state)
+
         print(
-            "AUTO ONE-SHOT: permanently closed %d completed series"
-            % len(processed),
+            "AUTO SERIES CYCLE: cleared legacy permanently-processed series state",
             flush=True
         )
 
@@ -2553,6 +2539,24 @@ def load_next_series_episodes(state):
             save_state(state)
         print("LOADED NEXT SERIES:", sref.get("series_title"), "·", len(entries), "episodes", flush=True)
         return True
+
+    # Reached the end of the A-Z library.
+    #
+    # Reset the traversal only. Episode-level search history
+    # prevents old episodes from being searched repeatedly.
+    # New future episode IDs remain eligible next cycle.
+    if sq:
+        state["series_cursor"] = 0
+        state["work_queue"] = []
+        state["work_cursor"] = 0
+
+        if LIVE:
+            save_state(state)
+
+        print(
+            "AUTO LIBRARY CYCLE COMPLETE: next run starts a fresh A-Z scan for new episode IDs",
+            flush=True
+        )
 
     return False
 
@@ -3975,19 +3979,24 @@ def choose_best(item, releases, state):
 
     else:
 
-        # SMART SONARR NORMAL RANKING V2C
+        # SMART SONARR NORMAL RANKING V2B
         #
         # Normal 720/1080 ranking deliberately does NOT add
         # HDR/Atmos priority. Those remain UHD-specific here.
-        #
-        # STORAGE-FIRST:
-        # File size is unconditional priority #1 after all
-        # evaluate_release() safety/eligibility checks pass.
 
         pool.sort(
             key=lambda x: (
 
                 # PRIORITY #1 - STORAGE SIZE
+                #
+                # All releases reaching choose_best() have already
+                # passed Smart Optimizer's safety gates.
+                #
+                # For normal 720p/1080p optimization:
+                # SMALLEST VALID RELEASE WINS.
+                #
+                # Indexer/source/codec/audio/etc. are only
+                # tie-breakers after size.
                 float(
                     x.get(
                         "size_mib"

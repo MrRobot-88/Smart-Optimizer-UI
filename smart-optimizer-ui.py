@@ -78,38 +78,13 @@ UPDATE_RELEASE_API = (
     + "/releases/latest"
 )
 
-UPDATE_MANIFEST_URL = (
-    "https://github.com/"
-    + UPDATE_REPOSITORY
-    + "/releases/latest/download/SmartOptimizerUI-update.json"
-)
-
-SMART_OPTIMIZER_PACKAGE_VAR = (
-    str(
-        os.environ.get(
-            "SMART_OPTIMIZER_PACKAGE_VAR",
-            ""
-        )
-        or ""
-    )
-    .strip()
-)
-
-
 UPDATE_DIR = os.environ.get(
     "SMART_OPTIMIZER_UPDATE_DIR",
-    (
-        os.path.join(
-            SMART_OPTIMIZER_PACKAGE_VAR,
-            "updates"
-        )
-        if SMART_OPTIMIZER_PACKAGE_VAR
-        else os.path.join(
-            os.path.dirname(
-                CONTROL_FILE
-            ),
-            "updates"
-        )
+    os.path.join(
+        os.path.dirname(
+            CONTROL_FILE
+        ),
+        "updates"
     )
 )
 
@@ -121,26 +96,6 @@ UPDATE_REQUEST_FILE = os.path.join(
 UPDATE_STATUS_FILE = os.path.join(
     UPDATE_DIR,
     "status.json"
-)
-
-SMART_SELF_UPDATE_MODE = (
-    str(
-        os.environ.get(
-            "SMART_OPTIMIZER_SELF_UPDATE_MODE",
-            ""
-        )
-        or ""
-    )
-    .strip()
-    .lower()
-)
-
-APP_UPDATE_REQUEST_FILE = os.environ.get(
-    "SMART_OPTIMIZER_APP_UPDATE_REQUEST",
-    os.path.join(
-        UPDATE_DIR,
-        "app-update-request.json"
-    )
 )
 
 UPDATE_LOCK = threading.Lock()
@@ -1169,7 +1124,7 @@ body{
 
 </style>
 
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico?v=2">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico">
 </head>
 
 
@@ -2189,36 +2144,13 @@ def _process_tracker_jobs(
                     )
                     changed = True
 
-            if policy == "keep_seed":
-                desired = str(
-                    job.get(
-                        "desired_label"
-                    )
-                    or (
-                        "torrentleech-movies"
-                        if app == "radarr"
-                        else "torrentleech-tv"
-                    )
-                )
-
-                if status:
-                    current_label = str(
-                        status.get("label")
-                        or ""
-                    )
-
-                    if current_label != desired:
-                        deluge_set_exact_label(
-                            download_id,
-                            desired,
-                        )
-                        job[
-                            "labeled_at"
-                        ] = int(
-                            time.time()
-                        )
-                        changed = True
-
+            # ARR_POST_IMPORT_RETENTION_ONLY_V1
+            #
+            # Never move an Arr-owned torrent into its retention /
+            # seeding label before Arr has independently proven import.
+            #
+            # The existing keep_seed block AFTER import verification
+            # remains authoritative.
             imported = (
                 _tracker_import_proven(
                     app,
@@ -2414,7 +2346,7 @@ def app_controls(app):
     data = load_controls()
     c = data.get(app, {})
     today = time.strftime("%Y-%m-%d")
-    return float(c.get("min_saving_percent", 0.0)), float(c.get("max_saving_percent", 0.0)), int((c.get("daily_extra") or {}).get(today, 0))
+    return float(c.get("min_saving_percent", 5.0)), float(c.get("max_saving_percent", 50.0)), int((c.get("daily_extra") or {}).get(today, 0))
 
 def update_saving_window(app, minimum, maximum):
     if not (0 <= minimum <= maximum <= 100):
@@ -2441,6 +2373,11 @@ RULE_DEFINITIONS = {
         (
             "Targets",
             (
+                (
+                    "future_only_existing_library",
+                    "Future downloads only",
+                    "RADARR_FUTURE_ONLY_RULE_V1 - Block automatic and bulk Smart Optimizer passes over movies already in the Radarr library. Native future Radarr grabs remain active. Single-movie Manual Optimize remains available."
+                ),
                 (
                     "storage_optimization",
                     "Storage optimization",
@@ -2897,6 +2834,7 @@ ADVANCED_BOOL_KEYS = (
     "prefer_lossless_audio",
     "prefer_eac3",
     "prefer_proper_repack",
+    "size_first_over_proper_repack",
     "prefer_freeleech",
     "prefer_smaller",
     "prefer_seeders",
@@ -2996,7 +2934,164 @@ def advanced_preferences(app):
 
     result["indexer_priority"] = cleaned
 
+
+    # ARR_NATIVE_SIZE_FIRST_UI_V2
+    #
+    # Mirror the real native Arr setting.
+    #
+    # doNotPrefer means Custom Format scoring is allowed
+    # to rank ahead of PROPER / REPACK revision.
+    if app in (
+        "radarr",
+        "sonarr",
+    ):
+
+        try:
+
+            getter = (
+                radarr_get
+                if app == "radarr"
+                else sonarr_get
+            )
+
+            live_media = getter(
+                "/config/mediamanagement"
+            ) or {}
+
+            live_mode = str(
+                live_media.get(
+                    "downloadPropersAndRepacks"
+                )
+                or ""
+            ).strip().lower()
+
+            result[
+                "size_first_over_proper_repack"
+            ] = (
+                live_mode
+                == "donotprefer"
+            )
+
+        except Exception:
+
+            # Arr temporarily unavailable:
+            # retain last persisted UI value.
+            pass
+
     return result
+
+
+# ================================================================
+# ARR NATIVE SIZE-FIRST / PROPER-REPACK INTEGRATION
+# ARR_NATIVE_SIZE_FIRST_UI_V2
+# ================================================================
+
+def apply_arr_native_size_first(
+    app,
+    enabled,
+):
+    """
+    Keep native Radarr/Sonarr grab ranking compatible with
+    the Smart Optimizer storage-first policy.
+
+    ON:
+        Propers and Repacks = Do Not Prefer
+
+    OFF:
+        Propers and Repacks = Do Not Upgrade
+
+    No media files, queues, quality profiles or size ceilings
+    are changed here.
+    """
+
+    if app not in (
+        "radarr",
+        "sonarr",
+    ):
+        raise ValueError(
+            "Unknown Arr application"
+        )
+
+
+    getter = (
+        radarr_get
+        if app == "radarr"
+        else sonarr_get
+    )
+
+    requester = (
+        radarr_request
+        if app == "radarr"
+        else sonarr_request
+    )
+
+
+    wanted = (
+        "doNotPrefer"
+        if bool(enabled)
+        else "doNotUpgrade"
+    )
+
+
+    media = (
+        getter(
+            "/config/mediamanagement"
+        )
+        or {}
+    )
+
+
+    current = str(
+        media.get(
+            "downloadPropersAndRepacks"
+        )
+        or ""
+    )
+
+
+    if current != wanted:
+
+        media[
+            "downloadPropersAndRepacks"
+        ] = wanted
+
+        requester(
+            "/config/mediamanagement",
+            method="PUT",
+            payload=media,
+        )
+
+
+    verify = (
+        getter(
+            "/config/mediamanagement"
+        )
+        or {}
+    )
+
+    actual = str(
+        verify.get(
+            "downloadPropersAndRepacks"
+        )
+        or ""
+    )
+
+
+    if actual != wanted:
+
+        raise RuntimeError(
+            "%s Propers/Repacks verification failed: "
+            "wanted %s, got %s"
+            % (
+                app.capitalize(),
+                wanted,
+                actual,
+            )
+        )
+
+
+    return actual
+
 
 
 def update_advanced_preferences(
@@ -3015,6 +3110,34 @@ def update_advanced_preferences(
     current = advanced_preferences(
         app
     )
+
+    # ARR_NATIVE_SIZE_FIRST_UI_V2
+    #
+    # Apply the real native Arr setting BEFORE persisting
+    # the UI value so the toggle always reflects reality.
+    if (
+        app in (
+            "radarr",
+            "sonarr",
+        )
+        and "size_first_over_proper_repack"
+            in values
+    ):
+
+        wanted_size_first = bool(
+            values.get(
+                "size_first_over_proper_repack"
+            )
+        )
+
+        apply_arr_native_size_first(
+            app,
+            wanted_size_first
+        )
+
+        current[
+            "size_first_over_proper_repack"
+        ] = wanted_size_first
 
     for key in ADVANCED_BOOL_KEYS:
 
@@ -4019,6 +4142,51 @@ def rules_page(app):
 
 
     advanced_sections = []
+
+
+
+    # ARR_NATIVE_SIZE_FIRST_UI_V2
+    #
+    # Show the same native size-first rule on both Arr pages.
+    if app in (
+        "radarr",
+        "sonarr",
+    ):
+
+        advanced_sections.append(
+            """
+<div style="margin-top:18px">
+
+  <h3 style="margin:0 0 10px">
+    Native %s grab ranking
+  </h3>
+
+  <div class="rule-list">
+    %s
+  </div>
+
+</div>
+"""
+            % (
+                html.escape(
+                    app.capitalize()
+                ),
+
+                advanced_toggle_card(
+                    "size_first_over_proper_repack",
+                    "Size-first over PROPER / REPACK",
+                    (
+                        "Keep %s Propers and Repacks set to "
+                        "'Do Not Prefer' so Custom Format size "
+                        "scores are evaluated before "
+                        "PROPER/REPACK revision. Prevents a "
+                        "large corrected release from beating "
+                        "a much smaller valid release."
+                        % app.capitalize()
+                    ),
+                ),
+            )
+        )
 
 
     groups = (
@@ -7145,7 +7313,7 @@ def exclusions_page(app):
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>%s exclusions</title>
 <style>%s</style>
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico?v=2">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico">
 </head>
 <body>
 <div class="shell">
@@ -10868,7 +11036,26 @@ def _dead_watchdog_is_strict_dead(
         return False
 
     now = time.time()
-    started = _dead_watchdog_zero_since.setdefault(key, now)
+
+    # The same infohash may be removed and later re-added.
+    # Never reuse a zero-progress timer from an older Deluge
+    # instance of that torrent.
+    try:
+        time_added = float(status.get("time_added") or 0)
+    except (TypeError, ValueError):
+        time_added = 0.0
+
+    started = _dead_watchdog_zero_since.get(key)
+
+    if (
+        started is None
+        or (
+            time_added > 0
+            and time_added > started
+        )
+    ):
+        started = now
+        _dead_watchdog_zero_since[key] = started
 
     return (now - started) >= float(minimum_age)
 
@@ -10940,6 +11127,14 @@ def _dead_watchdog_remove_exact_queue(app, row):
         radarr_request(path, method="DELETE")
     else:
         sonarr_request(path, method="DELETE")
+
+    # The removed infohash may later be re-added by Arr.
+    # Its next download attempt must start with a fresh
+    # strict-dead observation window.
+    _dead_watchdog_zero_since.pop(
+        download_id,
+        None,
+    )
 
     return media_id, download_id
 
@@ -16124,7 +16319,7 @@ body.smart-home{
 
 </style>
 
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico?v=2">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico">
 </head>
 
 
@@ -16796,133 +16991,6 @@ def latest_update_release(
             return dict(cached)
 
 
-        raw = None
-        manifest_error = None
-
-        manifest_request = urllib.request.Request(
-            UPDATE_MANIFEST_URL,
-            headers={
-                "Accept":
-                    "application/json",
-
-                "User-Agent":
-                    "Smart-Optimizer-UI/%s"
-                    % SMART_OPTIMIZER_VERSION,
-            }
-        )
-
-        try:
-
-            with urllib.request.urlopen(
-                manifest_request,
-                timeout=20
-            ) as response:
-
-                raw = json.loads(
-                    response.read().decode(
-                        "utf-8"
-                    )
-                )
-
-            if not isinstance(
-                raw,
-                dict
-            ):
-                raise RuntimeError(
-                    "Update manifest is invalid."
-                )
-
-            release = {
-                "tag":
-                    str(
-                        raw.get(
-                            "tag"
-                        )
-                        or ""
-                    ),
-
-                "version":
-                    str(
-                        raw.get(
-                            "version"
-                        )
-                        or ""
-                    ),
-
-                "name":
-                    str(
-                        raw.get(
-                            "name"
-                        )
-                        or "Latest release"
-                    ),
-
-                "notes":
-                    str(
-                        raw.get(
-                            "notes"
-                        )
-                        or ""
-                    ),
-
-                "published_at":
-                    str(
-                        raw.get(
-                            "published_at"
-                        )
-                        or ""
-                    ),
-
-                "html_url":
-                    str(
-                        raw.get(
-                            "html_url"
-                        )
-                        or ""
-                    ),
-
-                "asset":
-                    (
-                        raw.get(
-                            "app_asset"
-                        )
-                        if SMART_SELF_UPDATE_MODE == "app-bundle"
-                        else raw.get(
-                            "spk_asset"
-                        )
-                    ),
-            }
-
-            if (
-                not release["version"]
-                or not isinstance(
-                    release["asset"],
-                    dict
-                )
-            ):
-                raise RuntimeError(
-                    "Update manifest is incomplete."
-                )
-
-            UPDATE_CACHE[
-                "loaded"
-            ] = now
-
-            UPDATE_CACHE[
-                "release"
-            ] = dict(
-                release
-            )
-
-            return release
-
-        except Exception as exc:
-
-            manifest_error = str(
-                exc
-            )
-
-
         request = urllib.request.Request(
             UPDATE_RELEASE_API,
             headers={
@@ -16936,31 +17004,14 @@ def latest_update_release(
         )
 
 
-        try:
+        with urllib.request.urlopen(
+            request,
+            timeout=20
+        ) as response:
 
-            with urllib.request.urlopen(
-                request,
-                timeout=20
-            ) as response:
-
-                raw = json.loads(
-                    response.read().decode(
-                        "utf-8"
-                    )
-                )
-
-        except Exception as exc:
-
-            if cached:
-                return dict(
-                    cached
-                )
-
-            raise RuntimeError(
-                "Could not check for updates. Manifest: %s; GitHub API: %s"
-                % (
-                    manifest_error,
-                    exc,
+            raw = json.loads(
+                response.read().decode(
+                    "utf-8"
                 )
             )
 
@@ -16992,61 +17043,26 @@ def latest_update_release(
         ]
 
 
-        app_assets = [
+        # Prefer the future complete offline package.
+        offline = [
             asset
-            for asset in assets
-            if (
-                str(
-                    asset.get("name")
-                    or ""
-                )
-                .lower()
-                .startswith(
-                    "smartoptimizerui-app-"
-                )
-                and str(
-                    asset.get("name")
-                    or ""
-                )
-                .lower()
-                .endswith(
-                    ".tar.gz"
-                )
-            )
+            for asset in spk_assets
+            if "offline" in str(
+                asset.get("name")
+                or ""
+            ).lower()
         ]
 
 
-        # Supervised SPK installs update only the writable app payload.
-        # Legacy/non-supervised installs keep the verified SPK flow.
-        if SMART_SELF_UPDATE_MODE == "app-bundle":
-
-            chosen = (
-                app_assets[0]
-                if app_assets
+        chosen = (
+            offline[0]
+            if offline
+            else (
+                spk_assets[0]
+                if spk_assets
                 else None
             )
-
-        else:
-
-            offline = [
-                asset
-                for asset in spk_assets
-                if "offline" in str(
-                    asset.get("name")
-                    or ""
-                ).lower()
-            ]
-
-
-            chosen = (
-                offline[0]
-                if offline
-                else (
-                    spk_assets[0]
-                    if spk_assets
-                    else None
-                )
-            )
+        )
 
 
         tag = str(
@@ -17116,11 +17132,7 @@ def download_latest_update():
 
     if not asset:
         raise RuntimeError(
-            (
-                "The latest GitHub release has no application update bundle."
-                if SMART_SELF_UPDATE_MODE == "app-bundle"
-                else "The latest GitHub release has no SPK package."
-            )
+            "The latest GitHub release has no SPK package."
         )
 
 
@@ -17140,45 +17152,15 @@ def download_latest_update():
     )
 
 
-    if SMART_SELF_UPDATE_MODE == "app-bundle":
-
-        valid_asset = (
-            bool(
-                asset_url
-                and filename
-            )
-            and filename.lower().startswith(
-                "smartoptimizerui-app-"
-            )
-            and filename.lower().endswith(
-                ".tar.gz"
-            )
+    if (
+        not asset_url
+        or not filename
+        or not filename.lower().endswith(
+            ".spk"
         )
-
-        invalid_message = (
-            "Invalid application update asset."
-        )
-
-    else:
-
-        valid_asset = (
-            bool(
-                asset_url
-                and filename
-            )
-            and filename.lower().endswith(
-                ".spk"
-            )
-        )
-
-        invalid_message = (
-            "Invalid SPK release asset."
-        )
-
-
-    if not valid_asset:
+    ):
         raise RuntimeError(
-            invalid_message
+            "Invalid SPK release asset."
         )
 
 
@@ -17264,28 +17246,24 @@ def download_latest_update():
         ).strip().lower()
 
 
-        if not expected_digest.startswith(
+        if expected_digest.startswith(
             "sha256:"
         ):
-            raise RuntimeError(
-                "Release asset has no trusted SHA-256 digest."
+
+            expected_sha = (
+                expected_digest.split(
+                    ":",
+                    1
+                )[1]
+                .strip()
             )
 
 
-        expected_sha = (
-            expected_digest.split(
-                ":",
-                1
-            )[1]
-            .strip()
-        )
+            if actual_sha.lower() != expected_sha:
 
-
-        if actual_sha.lower() != expected_sha:
-
-            raise RuntimeError(
-                "Downloaded update failed SHA-256 verification."
-            )
+                raise RuntimeError(
+                    "Downloaded SPK failed SHA-256 verification."
+                )
 
 
         os.replace(
@@ -17312,96 +17290,72 @@ def download_latest_update():
     )
 
 
-    if SMART_SELF_UPDATE_MODE == "app-bundle":
+    status = {
+        "state": "downloaded",
 
-        status = {
-            "state": "queued",
+        "message":
+            "Package downloaded and SHA-256 verified.",
 
-            "message":
-                "Update verified. Smart Optimizer will restart automatically.",
+        "current_version":
+            SMART_OPTIMIZER_VERSION,
 
-            "current_version":
-                SMART_OPTIMIZER_VERSION,
+        "target_version":
+            version,
 
-            "target_version":
-                version,
+        "filename":
+            filename,
 
-            "filename":
-                filename,
+        "sha256":
+            actual_sha,
 
-            "sha256":
-                actual_sha,
-
-            "updated_at":
-                int(time.time()),
-        }
+        "updated_at":
+            int(time.time()),
+    }
 
 
-        _update_json_write(
-            UPDATE_STATUS_FILE,
-            status
-        )
+    _update_json_write(
+        UPDATE_STATUS_FILE,
+        status
+    )
 
 
-        _update_json_write(
-            APP_UPDATE_REQUEST_FILE,
-            {
-                "action":
-                    "install-app-bundle",
+    install_request = {
+        "action":
+            "install",
 
-                "current_version":
-                    SMART_OPTIMIZER_VERSION,
+        "current_version":
+            SMART_OPTIMIZER_VERSION,
 
-                "target_version":
-                    version,
+        "target_version":
+            version,
 
-                "filename":
-                    filename,
+        "tag":
+            release.get("tag")
+            or "",
 
-                "bundle_path":
-                    final_path,
+        "filename":
+            filename,
 
-                "sha256":
-                    actual_sha,
+        "container_path":
+            final_path,
 
-                # Give the HTTP response time to reach the browser.
-                "not_before":
-                    int(time.time()) + 5,
+        "sha256":
+            actual_sha,
 
-                "requested_at":
-                    int(time.time()),
-            }
-        )
+        # Let the browser receive the result page before
+        # the host updater begins an SPK restart.
+        "not_before":
+            int(time.time()) + 8,
 
-    else:
-
-        status = {
-            "state": "ready",
-
-            "message":
-                "Verified SPK ready for manual installation.",
-
-            "current_version":
-                SMART_OPTIMIZER_VERSION,
-
-            "target_version":
-                version,
-
-            "filename":
-                filename,
-
-            "sha256":
-                actual_sha,
-
-            "updated_at":
-                int(time.time()),
-        }
+        "requested_at":
+            int(time.time()),
+    }
 
 
-        _update_json_write(
-            UPDATE_STATUS_FILE,
-            status
-        )
+    _update_json_write(
+        UPDATE_REQUEST_FILE,
+        install_request
+    )
 
 
     return {
@@ -17417,61 +17371,6 @@ def download_latest_update():
         "path":
             final_path,
     }
-
-
-def verified_update_file():
-    status = update_runtime_status()
-
-    filename = os.path.basename(
-        str(
-            status.get(
-                "filename"
-            )
-            or ""
-        ).strip()
-    )
-
-    target_version = str(
-        status.get(
-            "target_version"
-        )
-        or ""
-    ).strip()
-
-    if (
-        str(
-            status.get(
-                "state"
-            )
-            or ""
-        )
-        != "ready"
-        or not filename
-        or not filename.lower().endswith(
-            ".spk"
-        )
-    ):
-        raise RuntimeError(
-            "No verified SPK is ready for download."
-        )
-
-    path = os.path.join(
-        UPDATE_DIR,
-        filename
-    )
-
-    if not os.path.isfile(
-        path
-    ):
-        raise RuntimeError(
-            "The verified SPK file is no longer available."
-        )
-
-    return (
-        filename,
-        path,
-        target_version,
-    )
 
 
 def update_status_payload():
@@ -17662,7 +17561,7 @@ def updates_page(
         asset.get(
             "name"
         )
-        or "No update asset"
+        or "No SPK asset"
     )
 
 
@@ -17700,27 +17599,6 @@ def updates_page(
         )
         or ""
     )
-
-
-    prepared_update = False
-
-    if SMART_SELF_UPDATE_MODE != "app-bundle":
-
-        try:
-            (
-                _prepared_name,
-                _prepared_path,
-                _prepared_version,
-            ) = verified_update_file()
-
-            prepared_update = bool(
-                latest_version
-                and _prepared_version
-                == latest_version
-            )
-
-        except Exception:
-            prepared_update = False
 
 
     notice = ""
@@ -17767,98 +17645,6 @@ def updates_page(
         if not asset
         else ""
     )
-
-
-    if release_error:
-
-        update_action = (
-            "<button "
-            "id='updateButton' "
-            "class='update-btn' "
-            "type='button' "
-            "disabled>"
-            "Unavailable"
-            "</button>"
-        )
-
-    elif (
-        SMART_SELF_UPDATE_MODE == "app-bundle"
-        and runtime_state
-        in (
-            "queued",
-            "installing",
-        )
-    ):
-
-        update_action = (
-            "<button "
-            "id='updateButton' "
-            "class='update-btn' "
-            "type='button' "
-            "disabled>"
-            "Updating…"
-            "</button>"
-        )
-
-    elif (
-        SMART_SELF_UPDATE_MODE == "app-bundle"
-        and not available
-    ):
-
-        update_action = (
-            "<button "
-            "id='updateButton' "
-            "class='update-btn' "
-            "type='button' "
-            "disabled>"
-            "Up to date"
-            "</button>"
-        )
-
-    elif SMART_SELF_UPDATE_MODE == "app-bundle":
-
-        update_action = (
-            "<form "
-            "id='updateForm' "
-            "method='post' "
-            "action='/update-download'>"
-            "<button "
-            "id='updateButton' "
-            "class='update-btn' "
-            "type='submit'%s>"
-            "Update now"
-            "</button>"
-            "</form>"
-            % download_disabled
-        )
-
-    elif prepared_update:
-
-        update_action = (
-            "<a "
-            "id='updateButton' "
-            "class='update-btn' "
-            "href='/update-package-file'>"
-            "Download verified SPK"
-            "</a>"
-        )
-
-    else:
-
-        update_action = (
-            "<form "
-            "id='updateForm' "
-            "method='post' "
-            "action='/update-download'>"
-            "<button "
-            "id='updateButton' "
-            "class='update-btn' "
-            "type='submit'%s>"
-            "Prepare update"
-            "</button>"
-            "</form>"
-            % download_disabled
-        )
 
 
     rendered = _smart_expand_common("""<!doctype html>
@@ -18281,11 +18067,6 @@ body.updatebody{
     min-height:46px;
     padding:0 20px;
 
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    text-decoration:none;
-
     border-radius:13px;
 
     border:
@@ -18384,7 +18165,7 @@ body.updatebody{
 }
 
 </style>
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico?v=2">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico">
 </head>
 
 
@@ -18556,7 +18337,10 @@ body.updatebody{
             </h2>
 
             <p>
-                __UPDATE_EXPLANATION__
+                Download the verified SPK release.
+                When Smart Optimizer is installed as an SPK,
+                the host updater installs it automatically
+                and restarts the package.
             </p>
 
         </div>
@@ -18573,13 +18357,28 @@ body.updatebody{
                 <div class="update-package-meta">
                     __ASSET_SIZE__
                     · GitHub Release
-                    · SHA-256 verified before download
+                    · SHA-256 verified before installation
                 </div>
 
             </div>
 
 
-            __UPDATE_ACTION__
+            <form
+                id="updateForm"
+                method="post"
+                action="/update-download"
+            >
+
+                <button
+                    id="updateButton"
+                    class="update-btn"
+                    type="submit"
+                    __DOWNLOAD_DISABLED__
+                >
+                    Download latest
+                </button>
+
+            </form>
 
         </div>
 
@@ -18612,11 +18411,7 @@ body.updatebody{
                 button.disabled = true;
 
                 button.textContent =
-                    (
-                        "__SELF_UPDATE_MODE__" === "app-bundle"
-                        ? "Updating…"
-                        : "Downloading…"
-                    );
+                    "Downloading…";
 
             }
         );
@@ -18671,31 +18466,6 @@ body.updatebody{
                 message.textContent =
                     data.message
                     || "";
-
-            }
-
-
-            if(
-                "__SELF_UPDATE_MODE__" === "app-bundle"
-                &&
-                data.state === "updated"
-                &&
-                data.installed
-                &&
-                data.target_version
-                &&
-                data.installed === data.target_version
-                &&
-                data.installed !== "__CURRENT_VERSION__"
-            ){
-
-                window.setTimeout(
-                    function(){
-                        window.location.href =
-                            "/updates?refresh=1";
-                    },
-                    900
-                );
 
             }
 
@@ -18773,20 +18543,6 @@ body.updatebody{
         "__RELEASE_NOTES__":
             notes_html,
 
-        "__UPDATE_EXPLANATION__":
-            (
-                "Download, verify, install, and restart automatically. "
-                "The Synology package stays in place while the writable "
-                "Smart Optimizer application payload is updated, similar "
-                "to the in-app updater model used by Radarr."
-                if SMART_SELF_UPDATE_MODE == "app-bundle"
-                else
-                "Prepare and verify the latest SPK release. "
-                "Download the verified SPK here, then install it over "
-                "the current version using DSM Package Center > "
-                "Manual Install. Your saved settings are preserved."
-            ),
-
         "__ASSET_NAME__":
             html.escape(
                 asset_name
@@ -18799,14 +18555,6 @@ body.updatebody{
 
         "__DOWNLOAD_DISABLED__":
             download_disabled,
-
-        "__SELF_UPDATE_MODE__":
-            html.escape(
-                SMART_SELF_UPDATE_MODE
-            ),
-
-        "__UPDATE_ACTION__":
-            update_action,
 
     }
 
@@ -20073,7 +19821,7 @@ body.settingsbody{
 
 
 </style>
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico?v=2">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico">
 </head>
 <body class="settingsbody">
 
@@ -20198,7 +19946,7 @@ def history_page(app):
         rows = ""
         err = "<div class='notice bad'>%s API error: %s</div>" % (app.capitalize(), html.escape(str(exc)))
         title, noun = app.capitalize() + " history", "items"
-    return _smart_expand_common("""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer UI · %s</title><style>%s</style>  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico?v=2">
+    return _smart_expand_common("""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart Optimizer UI · %s</title><style>%s</style>  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico">
 </head><body><div class="shell">
 <div class="topbar compact"><div class="brand"><div class="brandcopy"><h1>%s</h1><div>Complete observed upgrade history available in the loaded API history window.</div></div></div><div class="nav"><a class="badge" href="/%s">← Back to dashboard</a></div></div>
 %s
@@ -22794,7 +22542,7 @@ class Handler(BaseHTTPRequestHandler):
 
             self.send_header(
                 "Cache-Control",
-                "no-store"
+                "public, max-age=86400"
             )
 
             self.end_headers()
@@ -22903,88 +22651,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Location", "/settings")
             self.end_headers()
             return
-
-        if path == "/update-package-file":
-
-            try:
-                (
-                    filename,
-                    file_path,
-                    _target_version,
-                ) = verified_update_file()
-
-                file_size = os.path.getsize(
-                    file_path
-                )
-
-                safe_name = (
-                    filename
-                    .replace(
-                        '"',
-                        ""
-                    )
-                    .replace(
-                        "\\",
-                        "_"
-                    )
-                )
-
-                self.send_response(
-                    200
-                )
-
-                self.send_header(
-                    "Content-Type",
-                    "application/octet-stream"
-                )
-
-                self.send_header(
-                    "Content-Disposition",
-                    'attachment; filename="%s"'
-                    % safe_name
-                )
-
-                self.send_header(
-                    "Content-Length",
-                    str(
-                        file_size
-                    )
-                )
-
-                self.send_header(
-                    "Cache-Control",
-                    "no-store"
-                )
-
-                self.end_headers()
-
-                with open(
-                    file_path,
-                    "rb"
-                ) as fh:
-
-                    while True:
-
-                        chunk = fh.read(
-                            1024 * 1024
-                        )
-
-                        if not chunk:
-                            break
-
-                        self.wfile.write(
-                            chunk
-                        )
-
-            except Exception as exc:
-
-                self.send_error(
-                    404,
-                    str(exc)
-                )
-
-            return
-
 
         if path == "/update-status":
 
@@ -23323,38 +22989,13 @@ class Handler(BaseHTTPRequestHandler):
                 )
 
 
-                if SMART_SELF_UPDATE_MODE == "app-bundle":
-
-                    self.send_response(
-                        303
-                    )
-
-                    self.send_header(
-                        "Location",
-                        "/updates?refresh=1"
-                    )
-
-                    self.send_header(
-                        "Cache-Control",
-                        "no-store"
-                    )
-
-                    self.end_headers()
-
-                    return
-
-
-                update_message = (
-                    "Smart Optimizer v%s downloaded and SHA-256 "
-                    "verified. Use Download verified SPK below, then "
-                    "install it over the current version in DSM "
-                    "Package Center > Manual Install."
-                    % target
-                )
-
-
                 rendered = updates_page(
-                    update_message
+                    (
+                        "Smart Optimizer v%s downloaded "
+                        "and SHA-256 verified. "
+                        "The updater will continue automatically."
+                    )
+                    % target
                 )
 
 
