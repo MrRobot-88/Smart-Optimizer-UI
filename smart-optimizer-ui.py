@@ -19,6 +19,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from sonarr_api_compat import sonarr_api_prefix
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -2365,7 +2366,9 @@ def test_connection(app, scheme=None, host=None, port=None, api_key=None):
     port = int(port or cfg["port"])
     key = (api_key or "").strip() or cfg["api_key"]
     if not key: raise RuntimeError("API key is missing")
-    url = "%s://%s:%d/api/v3/system/status" % (scheme, host, port)
+    base_url = "%s://%s:%d" % (scheme, host, port)
+    api_prefix = sonarr_api_prefix(base_url, key) if app == "sonarr" else "/api/v3"
+    url = base_url + api_prefix + "/system/status"
     req = urllib.request.Request(url, headers={"X-Api-Key": key, "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=8) as response:
         data = json.loads(response.read().decode("utf-8") or "{}")
@@ -7224,7 +7227,7 @@ def sonarr_request(path, method="GET", payload=None):
     data = None if payload is None else json.dumps(payload).encode("utf-8")
 
     req = urllib.request.Request(
-        connection_url("sonarr") + "/api/v3" + path,
+        connection_url("sonarr") + sonarr_api_prefix(connection_url("sonarr"), cfg["api_key"]) + path,
         data=data,
         method=method,
         headers={
