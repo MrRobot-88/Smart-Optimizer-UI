@@ -1,0 +1,104 @@
+name: Apply Sonarr v5 compatibility patch
+
+on:
+  push:
+    branches:
+      - sonarr-v5-compat
+    paths:
+      - .github/workflows/apply-sonarr-v5-compat.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: sonarr-v5-compat
+
+      - name: Apply surgical compatibility changes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected 1 match, found {count}: {old!r}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          # Sonarr optimizer engine: choose API generation centrally.
+          replace_once(
+              "sonarr-smart-optimizer.py",
+              "import urllib.error\nfrom datetime import datetime, timezone\n",
+              "import urllib.error\nfrom sonarr_api_compat import sonarr_api_prefix\nfrom datetime import datetime, timezone\n",
+          )
+          replace_once(
+              "sonarr-smart-optimizer.py",
+              '    url = SONARR_URL + "/api/v3" + path\n',
+              '    url = SONARR_URL + sonarr_api_prefix(SONARR_URL, API_KEY) + path\n',
+          )
+
+          # Smart UI: use the same Sonarr API generation for direct UI requests.
+          replace_once(
+              "smart-optimizer-ui.py",
+              "import urllib.request\nfrom http.cookies import SimpleCookie\n",
+              "import urllib.request\nfrom sonarr_api_compat import sonarr_api_prefix\nfrom http.cookies import SimpleCookie\n",
+          )
+          replace_once(
+              "smart-optimizer-ui.py",
+              '        connection_url("sonarr") + "/api/v3" + path,\n',
+              '        connection_url("sonarr") + sonarr_api_prefix(connection_url("sonarr"), cfg["api_key"]) + path,\n',
+          )
+          replace_once(
+              "smart-optimizer-ui.py",
+              '    url = "%s://%s:%d/api/v3/system/status" % (scheme, host, port)\n',
+              '    base_url = "%s://%s:%d" % (scheme, host, port)\n'
+              '    api_prefix = sonarr_api_prefix(base_url, key) if app == "sonarr" else "/api/v3"\n'
+              '    url = base_url + api_prefix + "/system/status"\n',
+          )
+
+          # Package the shared helper inside the container and syntax-check it too.
+          replace_once(
+              "Dockerfile",
+              "COPY smart-optimizer-ui.py /app/smart-optimizer-ui.py\n",
+              "COPY smart-optimizer-ui.py /app/smart-optimizer-ui.py\nCOPY sonarr_api_compat.py /app/sonarr_api_compat.py\n",
+          )
+          replace_once(
+              "Dockerfile",
+              "RUN python3 -m py_compile \\\n    /app/smart-optimizer-ui.py \\\n",
+              "RUN python3 -m py_compile \\\n    /app/smart-optimizer-ui.py \\\n    /app/sonarr_api_compat.py \\\n",
+          )
+
+      - name: Syntax checks
+        run: |
+          python3 -m py_compile \
+            smart-optimizer-ui.py \
+            sonarr-smart-optimizer.py \
+            radarr-smart-optimizer.py \
+            sonarr_api_compat.py
+
+      - name: Compatibility helper smoke tests
+        run: |
+          python3 - <<'PY'
+          from sonarr_api_compat import sonarr_api_prefix
+          assert sonarr_api_prefix("http://127.0.0.1:1", "x", "v5") == "/api/v5"
+          assert sonarr_api_prefix("http://127.0.0.1:1", "x", "v3") == "/api/v3"
+          assert sonarr_api_prefix("http://127.0.0.1:1", "x", "compat") == "/api/v3"
+          print("SONARR_API_COMPAT_SMOKE=OK")
+          PY
+
+      - name: Show diff
+        run: git diff --check && git diff --stat && git diff
+
+      - name: Commit tested patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Dockerfile smart-optimizer-ui.py sonarr-smart-optimizer.py sonarr_api_compat.py
+          git commit -m "Add Sonarr v5 API compatibility"
+          git push origin HEAD:sonarr-v5-compat
