@@ -8,6 +8,7 @@ import time
 import urllib.request
 import urllib.parse
 import urllib.error
+from sonarr_api_compat import sonarr_api_prefix
 from datetime import datetime, timezone
 
 # ============================================================
@@ -1549,7 +1550,7 @@ def mib(value):
 
 
 def api(method, path, data=None, timeout=120):
-    url = SONARR_URL + "/api/v3" + path
+    url = SONARR_URL + sonarr_api_prefix(SONARR_URL, API_KEY) + path
 
     headers = {
         "X-Api-Key": API_KEY,
