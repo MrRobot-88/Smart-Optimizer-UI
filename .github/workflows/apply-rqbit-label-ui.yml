@@ -16,6 +16,31 @@ jobs:
         with:
           ref: fix-rqbit-labels-client-ui
 
+      - name: Normalize patch helper targets
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('.github/scripts/apply-rqbit-label-ui.py')
+          s=p.read_text()
+          s=s.replace(
+              '''  <div class="cfg-row"><label class="cfg-label">Deluge password</label><input name="deluge_password" type="password" placeholder="Enter password"></div>''',
+              '''  <div class="cfg-row"><label class="cfg-label">Deluge password</label><input name="deluge_password" type="password" value="" placeholder="%s"></div>'''
+          )
+          s=s.replace(
+              '''  <div class="cfg-row"><label class="cfg-label">Deluge password</label><input name="deluge_password" type="password" placeholder="Enter password"></div>\n  </div>''',
+              '''  <div class="cfg-row"><label class="cfg-label">Deluge password</label><input name="deluge_password" type="password" value="" placeholder="%s"></div>\n  </div>'''
+          )
+          s=s.replace(
+              "marker = '''</form>\\n\\n</div>'''",
+              "marker = '''</form>\\n</section>'''"
+          )
+          s=s.replace(
+              "</script>\\n\\n</div>'''",
+              "</script>\\n</section>'''"
+          )
+          p.write_text(s)
+          PY
+
       - name: Apply patch
         run: python3 .github/scripts/apply-rqbit-label-ui.py
 
