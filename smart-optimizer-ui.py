@@ -19228,21 +19228,6 @@ def settings_page(message="", bad=False):
     <button class="cfg-btn cfg-btn-primary %s" type="submit">Save budget</button>
   </div>
 </form>
-<script>
-(function(){
-  const select = document.querySelector('select[name="selected"]');
-  const rqbit = document.getElementById('rqbit-settings-block');
-  const deluge = document.getElementById('deluge-settings-block');
-  if (!select || !rqbit || !deluge) return;
-  function syncClientFields(){
-    const useRqbit = select.value === 'rqbit';
-    rqbit.style.display = useRqbit ? '' : 'none';
-    deluge.style.display = useRqbit ? 'none' : '';
-  }
-  select.addEventListener('change', syncClientFields);
-  syncClientFields();
-})();
-</script>
 </section>""" % (
             theme,
             icon_src,
@@ -19299,6 +19284,21 @@ def settings_page(message="", bad=False):
   <div class="cfg-actions"><button type="submit" name="action" value="test">Test selected client</button><button type="submit" name="action" value="save">Save &amp; route Arr grabs</button></div>
   <div class="cfg-help">Saving enables the selected Deluge/rqbit client and disables the other managed client in both Radarr and Sonarr. Other client types are left untouched.</div>
 </form>
+<script>
+(function(){
+  const select = document.querySelector('select[name="selected"]');
+  const rqbit = document.getElementById('rqbit-settings-block');
+  const deluge = document.getElementById('deluge-settings-block');
+  if (!select || !rqbit || !deluge) return;
+  function syncClientFields(){
+    const useRqbit = select.value === 'rqbit';
+    rqbit.style.display = useRqbit ? '' : 'none';
+    deluge.style.display = useRqbit ? 'none' : '';
+  }
+  select.addEventListener('change', syncClientFields);
+  syncClientFields();
+})();
+</script>
 </section>""" % (
     dcfg["selected"].upper(),
     " selected" if dcfg["selected"] == "rqbit" else "",
