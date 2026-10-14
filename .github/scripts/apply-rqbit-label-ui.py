@@ -17,8 +17,7 @@ rep(
             "other_tv_label": str(rqbit.get("other_tv_label") or "other-indexer-tv").strip(),''',
 '''            "torrentleech_label": str(rqbit.get("torrentleech_label") or "torrentleech").strip(),
             "radarr_label": str(rqbit.get("radarr_label") or "radarr").strip(),
-            "sonarr_label": str(rqbit.get("sonarr_label") or "sonarr").strip(),''',
-2,
+            "sonarr_label": str(rqbit.get("sonarr_label") or "sonarr").strip(),'''
 )
 
 rep(
