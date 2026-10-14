@@ -1,0 +1,69 @@
+name: Apply rqbit retention controls
+
+on:
+  push:
+    branches: [rqbit-retention-controls]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rqbit-retention-controls
+
+      - name: Apply patch
+        run: python3 .github/scripts/apply_rqbit_retention_controls.py
+
+      - name: Syntax checks
+        run: |
+          python3 -m py_compile smart-optimizer-ui.py
+          python3 -m py_compile sonarr-smart-optimizer.py
+          python3 -m py_compile radarr-smart-optimizer.py
+          python3 -m py_compile sonarr_api_compat.py
+
+      - name: Static rqbit integration checks
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('smart-optimizer-ui.py').read_text()
+          checks = [
+              'def rqbit_torrent_status(',
+              'def rqbit_set_exact_label(',
+              'def rqbit_set_exact_retention(',
+              'def rqbit_mark_verified_import(',
+              'def rqbit_apply_job_policy(',
+              'rqbit movie label',
+              'rqbit TV label',
+              'rqbit retention time / ETA',
+              '11 days',
+              'r_retention_enabled',
+              'client == "rqbit"',
+              'RQBIT VERIFIED',
+          ]
+          missing = [x for x in checks if x not in s]
+          if missing:
+              raise SystemExit('missing checks: ' + repr(missing))
+          print('rqbit integration static checks OK')
+          PY
+
+      - name: Ensure only intended file changes before cleanup
+        run: |
+          git status --short
+          git diff --check
+
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add smart-optimizer-ui.py
+          if git diff --cached --quiet; then
+            echo 'No patch changes to commit'
+          else
+            git commit -m 'Add rqbit label and retention controls'
+            git push origin rqbit-retention-controls
+          fi
