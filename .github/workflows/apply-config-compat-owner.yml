@@ -1,0 +1,65 @@
+name: Apply config compatibility and downloader ownership
+
+on:
+  push:
+    branches: [config-compat-download-owner]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: config-compat-download-owner
+
+      - name: Apply patch
+        run: python3 .github/scripts/apply_config_compat_owner.py
+
+      - name: Compile Python
+        run: |
+          python3 -m py_compile smart-optimizer-ui.py
+          python3 -m py_compile sonarr-smart-optimizer.py
+          python3 -m py_compile radarr-smart-optimizer.py
+          python3 -m py_compile sonarr_api_compat.py
+
+      - name: Static compatibility checks
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('smart-optimizer-ui.py').read_text()
+          required = [
+              'encoding="utf-8-sig"',
+              'isinstance(raw_selected, dict)',
+              'isinstance(raw_selected, str)',
+              'legacy_downloader = data.get("downloader") or {}',
+              'data["download_client"] = selected',
+              'downloader_data["selected"] = selected',
+              'job["download_client"] = job_client',
+              'selected_client = download_client_settings()["selected"]',
+              'if job_client == "deluge":',
+              'elif job_client == "rqbit":',
+          ]
+          missing = [x for x in required if x not in s]
+          if missing:
+              raise SystemExit('missing: ' + repr(missing))
+          print('config compatibility static checks OK')
+          PY
+
+      - name: Diff check
+        run: git diff --check
+
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add smart-optimizer-ui.py
+          if git diff --cached --quiet; then
+            echo 'No code changes to commit'
+          else
+            git commit -m 'Support legacy downloader config and per-job ownership'
+            git push origin config-compat-download-owner
+          fi
