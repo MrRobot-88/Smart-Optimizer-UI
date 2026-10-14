@@ -1469,10 +1469,9 @@ def download_client_settings():
             "scheme": str(rqbit.get("scheme") or "http").lower(),
             "host": str(rqbit.get("host") or "127.0.0.1").strip(),
             "port": int(rqbit.get("port") or 3030),
-            "movie_label": str(rqbit.get("movie_label") or "torrentleech-movies").strip(),
-            "tv_label": str(rqbit.get("tv_label") or "torrentleech-tv").strip(),
-            "other_movie_label": str(rqbit.get("other_movie_label") or "other-indexer-movies").strip(),
-            "other_tv_label": str(rqbit.get("other_tv_label") or "other-indexer-tv").strip(),
+            "torrentleech_label": str(rqbit.get("torrentleech_label") or "torrentleech").strip(),
+            "radarr_label": str(rqbit.get("radarr_label") or "radarr").strip(),
+            "sonarr_label": str(rqbit.get("sonarr_label") or "sonarr").strip(),
             "retention_enabled": bool(rqbit.get("retention_enabled", True)),
             "retention_value": float(rqbit.get("retention_value") or 11),
             "retention_unit": str(rqbit.get("retention_unit") or "days").strip().lower(),
@@ -1503,10 +1502,9 @@ def update_download_client_settings(
     rqbit_scheme,
     rqbit_host,
     rqbit_port,
-    rqbit_movie_label=None,
-    rqbit_tv_label=None,
-    rqbit_other_movie_label=None,
-    rqbit_other_tv_label=None,
+    rqbit_torrentleech_label=None,
+    rqbit_radarr_label=None,
+    rqbit_sonarr_label=None,
     rqbit_retention_enabled=True,
     rqbit_retention_value=11,
     rqbit_retention_unit="days",
@@ -1525,16 +1523,17 @@ def update_download_client_settings(
     current = download_client_settings()
     password = str(deluge_password or "").strip() or current["deluge"]["password"]
 
-    movie_label = str(rqbit_movie_label or current["rqbit"]["movie_label"]).strip()
-    tv_label = str(rqbit_tv_label or current["rqbit"]["tv_label"]).strip()
-    other_movie_label = str(
-        rqbit_other_movie_label or current["rqbit"]["other_movie_label"]
+    torrentleech_label = str(
+        rqbit_torrentleech_label or current["rqbit"]["torrentleech_label"]
     ).strip()
-    other_tv_label = str(
-        rqbit_other_tv_label or current["rqbit"]["other_tv_label"]
+    radarr_label = str(
+        rqbit_radarr_label or current["rqbit"]["radarr_label"]
+    ).strip()
+    sonarr_label = str(
+        rqbit_sonarr_label or current["rqbit"]["sonarr_label"]
     ).strip()
 
-    for label in (movie_label, tv_label, other_movie_label, other_tv_label):
+    for label in (torrentleech_label, radarr_label, sonarr_label):
         if not label:
             raise ValueError("rqbit label names cannot be empty")
         if len(label) > 120:
@@ -1574,10 +1573,9 @@ def update_download_client_settings(
         "scheme": r_scheme,
         "host": r_host,
         "port": r_port,
-        "movie_label": movie_label,
-        "tv_label": tv_label,
-        "other_movie_label": other_movie_label,
-        "other_tv_label": other_tv_label,
+        "torrentleech_label": torrentleech_label,
+        "radarr_label": radarr_label,
+        "sonarr_label": sonarr_label,
         "retention_enabled": bool(rqbit_retention_enabled),
         "retention_value": value,
         "retention_unit": unit,
@@ -1794,14 +1792,13 @@ def rqbit_policy_settings(app, policy):
         raise ValueError("Unknown app")
 
     if policy == "keep_seed":
-        label = cfg["movie_label"] if app == "radarr" else cfg["tv_label"]
         return {
-            "label": label,
+            "label": cfg["torrentleech_label"],
             "seconds": int(cfg["retention_seconds"]),
             "delete_after_verified_import": bool(cfg["retention_enabled"]),
         }
 
-    label = cfg["other_movie_label"] if app == "radarr" else cfg["other_tv_label"]
+    label = cfg["radarr_label"] if app == "radarr" else cfg["sonarr_label"]
     return {
         "label": label,
         "seconds": 0,
@@ -19231,6 +19228,21 @@ def settings_page(message="", bad=False):
     <button class="cfg-btn cfg-btn-primary %s" type="submit">Save budget</button>
   </div>
 </form>
+<script>
+(function(){
+  const select = document.querySelector('select[name="selected"]');
+  const rqbit = document.getElementById('rqbit-settings-block');
+  const deluge = document.getElementById('deluge-settings-block');
+  if (!select || !rqbit || !deluge) return;
+  function syncClientFields(){
+    const useRqbit = select.value === 'rqbit';
+    rqbit.style.display = useRqbit ? '' : 'none';
+    deluge.style.display = useRqbit ? 'none' : '';
+  }
+  select.addEventListener('change', syncClientFields);
+  syncClientFields();
+})();
+</script>
 </section>""" % (
             theme,
             icon_src,
@@ -19265,21 +19277,25 @@ def settings_page(message="", bad=False):
 </div>
 <form method="post" action="/download-client-settings" class="cfg-form">
   <div class="cfg-row"><label class="cfg-label">Active client</label><select name="selected"><option value="rqbit"%s>rqbit</option><option value="deluge"%s>Deluge</option></select></div>
+  <div id="rqbit-settings-block">
   <div class="cfg-row"><label class="cfg-label">rqbit protocol</label><select name="rqbit_scheme"><option value="http"%s>http</option><option value="https"%s>https</option></select></div>
   <div class="cfg-row"><label class="cfg-label">rqbit host</label><input name="rqbit_host" value="%s"></div>
   <div class="cfg-row"><label class="cfg-label">rqbit port</label><input name="rqbit_port" type="number" min="1" max="65535" value="%d"></div>
   <div class="cfg-help">rqbit has no username/password in this setup.</div>
-  <div class="cfg-row"><label class="cfg-label">rqbit movie label</label><input name="rqbit_movie_label" value="%s" required></div>
-  <div class="cfg-row"><label class="cfg-label">rqbit TV label</label><input name="rqbit_tv_label" value="%s" required></div>
-  <div class="cfg-row"><label class="cfg-label">Other-indexer movie label</label><input name="rqbit_other_movie_label" value="%s" required></div>
-  <div class="cfg-row"><label class="cfg-label">Other-indexer TV label</label><input name="rqbit_other_tv_label" value="%s" required></div>
+  <div class="cfg-row"><label class="cfg-label">TorrentLeech label</label><input name="rqbit_torrentleech_label" value="%s" required></div>
+  <div class="cfg-help">Any grab from TorrentLeech gets this label, for both movies and TV.</div>
+  <div class="cfg-row"><label class="cfg-label">Radarr label</label><input name="rqbit_radarr_label" value="%s" required></div>
+  <div class="cfg-row"><label class="cfg-label">Sonarr label</label><input name="rqbit_sonarr_label" value="%s" required></div>
   <div class="cfg-row cfg-row-switch"><label class="cfg-label">rqbit auto cleanup after retention</label><label class="cfg-check"><input name="rqbit_retention_enabled" type="checkbox" value="1"%s><span>Enabled</span></label></div>
   <div class="cfg-row"><label class="cfg-label">rqbit retention time / ETA</label><input name="rqbit_retention_value" type="number" min="0" step="0.25" value="%s"><select name="rqbit_retention_unit"><option value="hours"%s>hours</option><option value="days"%s>days</option></select></div>
-  <div class="cfg-help">The countdown starts when rqbit marks the torrent complete. Default is 11 days. Smart Optimizer writes the exact label and retention policy into rqbit for each managed torrent.</div>
+  <div class="cfg-help">The countdown starts when rqbit marks a TorrentLeech torrent complete. Non-TorrentLeech grabs use the Radarr/Sonarr label and immediate verified-import cleanup policy.</div>
+  </div>
+  <div id="deluge-settings-block">
   <div class="cfg-row"><label class="cfg-label">Deluge protocol</label><select name="deluge_scheme"><option value="http"%s>http</option><option value="https"%s>https</option></select></div>
   <div class="cfg-row"><label class="cfg-label">Deluge host</label><input name="deluge_host" value="%s"></div>
   <div class="cfg-row"><label class="cfg-label">Deluge port</label><input name="deluge_port" type="number" min="1" max="65535" value="%d"></div>
   <div class="cfg-row"><label class="cfg-label">Deluge password</label><input name="deluge_password" type="password" value="" placeholder="%s"></div>
+  </div>
   <div class="cfg-actions"><button type="submit" name="action" value="test">Test selected client</button><button type="submit" name="action" value="save">Save &amp; route Arr grabs</button></div>
   <div class="cfg-help">Saving enables the selected Deluge/rqbit client and disables the other managed client in both Radarr and Sonarr. Other client types are left untouched.</div>
 </form>
@@ -19291,10 +19307,9 @@ def settings_page(message="", bad=False):
     " selected" if dcfg["rqbit"]["scheme"] == "https" else "",
     html.escape(dcfg["rqbit"]["host"], quote=True),
     int(dcfg["rqbit"]["port"]),
-    html.escape(dcfg["rqbit"]["movie_label"], quote=True),
-    html.escape(dcfg["rqbit"]["tv_label"], quote=True),
-    html.escape(dcfg["rqbit"]["other_movie_label"], quote=True),
-    html.escape(dcfg["rqbit"]["other_tv_label"], quote=True),
+    html.escape(dcfg["rqbit"]["torrentleech_label"], quote=True),
+    html.escape(dcfg["rqbit"]["radarr_label"], quote=True),
+    html.escape(dcfg["rqbit"]["sonarr_label"], quote=True),
     " checked" if dcfg["rqbit"]["retention_enabled"] else "",
     ("%g" % float(dcfg["rqbit"]["retention_value"])),
     " selected" if dcfg["rqbit"]["retention_unit"] == "hours" else "",
@@ -24170,10 +24185,9 @@ class Handler(BaseHTTPRequestHandler):
             r_scheme = (form.get("rqbit_scheme") or ["http"])[0]
             r_host = (form.get("rqbit_host") or ["127.0.0.1"])[0]
             r_port = (form.get("rqbit_port") or ["3030"])[0]
-            r_movie_label = (form.get("rqbit_movie_label") or ["torrentleech-movies"])[0]
-            r_tv_label = (form.get("rqbit_tv_label") or ["torrentleech-tv"])[0]
-            r_other_movie_label = (form.get("rqbit_other_movie_label") or ["other-indexer-movies"])[0]
-            r_other_tv_label = (form.get("rqbit_other_tv_label") or ["other-indexer-tv"])[0]
+            r_torrentleech_label = (form.get("rqbit_torrentleech_label") or ["torrentleech"])[0]
+            r_radarr_label = (form.get("rqbit_radarr_label") or ["radarr"])[0]
+            r_sonarr_label = (form.get("rqbit_sonarr_label") or ["sonarr"])[0]
             r_retention_enabled = (form.get("rqbit_retention_enabled") or [""])[0] == "1"
             r_retention_value = (form.get("rqbit_retention_value") or ["11"])[0]
             r_retention_unit = (form.get("rqbit_retention_unit") or ["days"])[0]
@@ -24197,10 +24211,9 @@ class Handler(BaseHTTPRequestHandler):
                         r_scheme,
                         r_host,
                         r_port,
-                        r_movie_label,
-                        r_tv_label,
-                        r_other_movie_label,
-                        r_other_tv_label,
+                        r_torrentleech_label,
+                        r_radarr_label,
+                        r_sonarr_label,
                         r_retention_enabled,
                         r_retention_value,
                         r_retention_unit,
