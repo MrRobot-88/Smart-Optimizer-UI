@@ -67,3 +67,5 @@ jobs:
             git commit -m 'Add rqbit label and retention controls'
             git push origin rqbit-retention-controls
           fi
+
+# one-shot patch workflow; removed before merge
