@@ -16,8 +16,16 @@ jobs:
         with:
           ref: rqbit-retention-controls
 
-      - name: Apply patch
-        run: python3 .github/scripts/apply_rqbit_retention_controls.py
+      - name: Apply initial patch when needed
+        run: |
+          if grep -q 'def rqbit_torrent_status(' smart-optimizer-ui.py; then
+            echo 'Initial rqbit patch already present'
+          else
+            python3 .github/scripts/apply_rqbit_retention_controls.py
+          fi
+
+      - name: Apply hardening patch
+        run: python3 .github/scripts/fix_rqbit_retention_controls.py
 
       - name: Syntax checks
         run: |
@@ -40,10 +48,11 @@ jobs:
               'rqbit movie label',
               'rqbit TV label',
               'rqbit retention time / ETA',
-              '11 days',
+              'The countdown starts when rqbit marks the torrent complete.',
               'r_retention_enabled',
               'client == "rqbit"',
               'RQBIT VERIFIED',
+              'rqbit.get("retention_value") is None',
           ]
           missing = [x for x in checks if x not in s]
           if missing:
@@ -51,10 +60,8 @@ jobs:
           print('rqbit integration static checks OK')
           PY
 
-      - name: Ensure only intended file changes before cleanup
-        run: |
-          git status --short
-          git diff --check
+      - name: Diff check
+        run: git diff --check
 
       - name: Commit patch
         run: |
@@ -64,7 +71,7 @@ jobs:
           if git diff --cached --quiet; then
             echo 'No patch changes to commit'
           else
-            git commit -m 'Add rqbit label and retention controls'
+            git commit -m 'Harden rqbit retention controls'
             git push origin rqbit-retention-controls
           fi
 
