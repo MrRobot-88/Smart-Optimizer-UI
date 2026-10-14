@@ -62,3 +62,5 @@ jobs:
             git commit -m 'Finalize rqbit retention integration'
             git push origin rqbit-retention-controls
           fi
+
+# one-shot finalizer; removed before merge
