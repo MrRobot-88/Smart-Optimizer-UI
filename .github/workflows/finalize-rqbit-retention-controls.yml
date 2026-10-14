@@ -1,0 +1,64 @@
+name: Finalize rqbit retention controls
+
+on:
+  push:
+    branches: [rqbit-retention-controls]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rqbit-retention-controls
+
+      - name: Apply final fixes
+        run: python3 .github/scripts/finalize_rqbit_retention_controls.py
+
+      - name: Compile all Python modules
+        run: |
+          python3 -m py_compile smart-optimizer-ui.py
+          python3 -m py_compile sonarr-smart-optimizer.py
+          python3 -m py_compile radarr-smart-optimizer.py
+          python3 -m py_compile sonarr_api_compat.py
+
+      - name: Validate rqbit settings and routing integration
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('smart-optimizer-ui.py').read_text()
+          required = [
+              'movie_label', 'tv_label', 'other_movie_label', 'other_tv_label',
+              'retention_enabled', 'retention_value', 'retention_unit', 'retention_seconds',
+              'def rqbit_torrent_status(', 'def rqbit_set_exact_label(',
+              'def rqbit_set_exact_retention(', 'def rqbit_mark_verified_import(',
+              'def rqbit_apply_job_policy(', 'RQBIT VERIFIED',
+              '[dead-watchdog] paused while rqbit is selected',
+              'The countdown starts when rqbit marks the torrent complete.',
+          ]
+          missing = [x for x in required if x not in s]
+          if missing:
+              raise SystemExit('missing: ' + repr(missing))
+          if '[dead-watchdog] disabled while rqbit is selected' in s:
+              raise SystemExit('old permanent watchdog shutdown still present')
+          print('final rqbit static checks OK')
+          PY
+
+      - name: Diff check
+        run: git diff --check
+
+      - name: Commit final fixes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add smart-optimizer-ui.py
+          if git diff --cached --quiet; then
+            echo 'No code changes to commit'
+          else
+            git commit -m 'Finalize rqbit retention integration'
+            git push origin rqbit-retention-controls
+          fi
