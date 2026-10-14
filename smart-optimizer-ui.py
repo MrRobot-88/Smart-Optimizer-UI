@@ -1432,12 +1432,30 @@ def connection_url(app):
 
 def download_client_settings():
     data = load_controls()
-    selected = str((data.get("download_client") or {}).get("selected") or "rqbit").strip().lower()
+
+    raw_selected = data.get("download_client")
+    selected = ""
+
+    if isinstance(raw_selected, dict):
+        selected = str(raw_selected.get("selected") or "").strip().lower()
+    elif isinstance(raw_selected, str):
+        selected = raw_selected.strip().lower()
+
+    if selected not in ("deluge", "rqbit"):
+        legacy_downloader = data.get("downloader") or {}
+        if isinstance(legacy_downloader, dict):
+            selected = str(legacy_downloader.get("selected") or "").strip().lower()
+
     if selected not in ("deluge", "rqbit"):
         selected = "rqbit"
 
     deluge = data.get("deluge", {}) or {}
+    if not isinstance(deluge, dict):
+        deluge = {}
+
     rqbit = data.get("rqbit", {}) or {}
+    if not isinstance(rqbit, dict):
+        rqbit = {}
 
     return {
         "selected": selected,
@@ -1456,9 +1474,9 @@ def download_client_settings():
             "other_movie_label": str(rqbit.get("other_movie_label") or "other-indexer-movies").strip(),
             "other_tv_label": str(rqbit.get("other_tv_label") or "other-indexer-tv").strip(),
             "retention_enabled": bool(rqbit.get("retention_enabled", True)),
-            "retention_value": float(11 if rqbit.get("retention_value") is None else rqbit.get("retention_value")),
+            "retention_value": float(rqbit.get("retention_value") or 11),
             "retention_unit": str(rqbit.get("retention_unit") or "days").strip().lower(),
-            "retention_seconds": int((11 * 24 * 60 * 60) if rqbit.get("retention_seconds") is None else rqbit.get("retention_seconds")),
+            "retention_seconds": int(rqbit.get("retention_seconds") or (11 * 24 * 60 * 60)),
         },
     }
 
@@ -1534,7 +1552,14 @@ def update_download_client_settings(
         raise ValueError("rqbit retention time is too large")
 
     data = load_controls()
-    data["download_client"] = {"selected": selected}
+    # Keep the long-lived scalar schema for backward compatibility.
+    data["download_client"] = selected
+    downloader_data = data.setdefault("downloader", {})
+    if not isinstance(downloader_data, dict):
+        downloader_data = {}
+        data["downloader"] = downloader_data
+    downloader_data["selected"] = selected
+    downloader_data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
     deluge_data = data.setdefault("deluge", {})
     deluge_data.update({
@@ -2473,9 +2498,9 @@ def _process_tracker_jobs(
 ):
     jobs = state.setdefault("tracker_jobs", {})
     changed = False
-    client = download_client_settings()["selected"]
+    selected_client = download_client_settings()["selected"]
 
-    if app == "radarr" and client == "deluge":
+    if app == "radarr" and selected_client == "deluge":
         if _ensure_radarr_tracker_jobs(state):
             changed = True
 
@@ -2496,7 +2521,13 @@ def _process_tracker_jobs(
 
             policy = str(job.get("tracker_policy") or "").strip()
 
-            if client == "deluge":
+            job_client = str(job.get("download_client") or "").strip().lower()
+            if job_client not in ("deluge", "rqbit"):
+                job_client = selected_client
+                job["download_client"] = job_client
+                changed = True
+
+            if job_client == "deluge":
                 try:
                     status = deluge_torrent_status(download_id)
                 except Exception as exc:
@@ -2520,7 +2551,7 @@ def _process_tracker_jobs(
                         job["labeled_at"] = int(time.time())
                         changed = True
 
-            elif client == "rqbit":
+            elif job_client == "rqbit":
                 # New optimizer jobs already persist their tracker policy from
                 # the exact selected Arr indexer. Unknown legacy jobs fail closed.
                 if policy not in ("keep_seed", "remove_after_verified_success"):
@@ -2570,7 +2601,7 @@ def _process_tracker_jobs(
                 if not bool(episode.get("hasFile")):
                     continue
 
-            if client == "rqbit":
+            if job_client == "rqbit":
                 settings = rqbit_apply_job_policy(app, policy, download_id)
                 rqbit_mark_verified_import(download_id)
                 jobs.pop(key, None)
@@ -2673,7 +2704,7 @@ def api_online(app):
 
 def load_controls():
     try:
-        with open(CONTROL_FILE, "r", encoding="utf-8") as f:
+        with open(CONTROL_FILE, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
             return data if isinstance(data, dict) else {}
     except Exception:
