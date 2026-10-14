@@ -1456,9 +1456,9 @@ def download_client_settings():
             "other_movie_label": str(rqbit.get("other_movie_label") or "other-indexer-movies").strip(),
             "other_tv_label": str(rqbit.get("other_tv_label") or "other-indexer-tv").strip(),
             "retention_enabled": bool(rqbit.get("retention_enabled", True)),
-            "retention_value": float(rqbit.get("retention_value") or 11),
+            "retention_value": float(11 if rqbit.get("retention_value") is None else rqbit.get("retention_value")),
             "retention_unit": str(rqbit.get("retention_unit") or "days").strip().lower(),
-            "retention_seconds": int(rqbit.get("retention_seconds") or (11 * 24 * 60 * 60)),
+            "retention_seconds": int((11 * 24 * 60 * 60) if rqbit.get("retention_seconds") is None else rqbit.get("retention_seconds")),
         },
     }
 
@@ -1786,12 +1786,25 @@ def rqbit_policy_settings(app, policy):
 
 def rqbit_apply_job_policy(app, policy, download_id):
     settings = rqbit_policy_settings(app, policy)
-    rqbit_set_exact_label(download_id, settings["label"])
-    rqbit_set_exact_retention(
-        download_id,
-        settings["seconds"],
-        settings["delete_after_verified_import"],
-    )
+    status = rqbit_torrent_status(download_id) or {}
+
+    if str(status.get("label") or "") != settings["label"]:
+        rqbit_set_exact_label(download_id, settings["label"])
+        # Setting a known native label may apply rqbit's built-in default
+        # policy, so re-read before checking our user-selected retention.
+        status = rqbit_torrent_status(download_id) or {}
+
+    if (
+        int(status.get("min_seed_seconds") or 0) != int(settings["seconds"])
+        or bool(status.get("delete_after_verified_import"))
+        != bool(settings["delete_after_verified_import"])
+    ):
+        rqbit_set_exact_retention(
+            download_id,
+            settings["seconds"],
+            settings["delete_after_verified_import"],
+        )
+
     return settings
 
 
@@ -2267,14 +2280,14 @@ def _tracker_import_proven(
 def _ensure_radarr_tracker_jobs(
     state,
 ):
-    if download_client_settings()["selected"] != "deluge":
-        return False
-
     """
     Backfill old pending Radarr grabs created before tracker metadata existed.
 
     Ownership still comes exclusively from the exact persisted download hash.
     """
+    if download_client_settings()["selected"] != "deluge":
+        return False
+
     changed = False
 
     pending = state.get(
