@@ -2532,13 +2532,24 @@ def _process_tracker_jobs(
                 if str(job.get("desired_label") or "") != desired:
                     job["desired_label"] = desired
                     changed = True
-                job["rqbit_retention_seconds"] = int(settings["seconds"])
-                job["rqbit_retention_enabled"] = bool(
-                    settings["delete_after_verified_import"]
-                )
-                job["labeled_at"] = int(job.get("labeled_at") or time.time())
-                job.pop("last_error", None)
-                changed = True
+
+                wanted_seconds = int(settings["seconds"])
+                if int(job.get("rqbit_retention_seconds") or 0) != wanted_seconds:
+                    job["rqbit_retention_seconds"] = wanted_seconds
+                    changed = True
+
+                wanted_cleanup = bool(settings["delete_after_verified_import"])
+                if job.get("rqbit_retention_enabled") is not wanted_cleanup:
+                    job["rqbit_retention_enabled"] = wanted_cleanup
+                    changed = True
+
+                if not job.get("labeled_at"):
+                    job["labeled_at"] = int(time.time())
+                    changed = True
+
+                if "last_error" in job:
+                    job.pop("last_error", None)
+                    changed = True
 
             else:
                 continue
@@ -11574,11 +11585,18 @@ def dead_download_watchdog_worker():
     * Orphan/manual torrents that cannot be tied to an exact Arr queue row are
       never guessed from title and are left for the 11-day stale cleanup.
     """
-    if download_client_settings()["selected"] != "deluge":
-        print("[dead-watchdog] disabled while rqbit is selected", flush=True)
-        return
+    rqbit_notice_shown = False
 
     while True:
+        if download_client_settings()["selected"] != "deluge":
+            if not rqbit_notice_shown:
+                print("[dead-watchdog] paused while rqbit is selected", flush=True)
+                rqbit_notice_shown = True
+            time.sleep(15)
+            continue
+
+        rqbit_notice_shown = False
+
         try:
             torrents = _dead_watchdog_deluge_statuses()
             optimizer = _dead_watchdog_optimizer_hashes()
